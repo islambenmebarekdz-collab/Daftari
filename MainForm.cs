@@ -97,7 +97,8 @@ public class MainForm : Form
         tree.KeyDown += Tree_KeyDown;
 
         editor.Multiline = true;
-        editor.ScrollBars = ScrollBars.Vertical;
+        editor.WordWrap = settings.WordWrap;
+        editor.ScrollBars = settings.WordWrap ? ScrollBars.Vertical : ScrollBars.Both;
         editor.AcceptsReturn = true;
         editor.AcceptsTab = true;
         editor.MaxLength = int.MaxValue;
@@ -230,6 +231,7 @@ public class MainForm : Form
         edit.DropDownItems.Add(MI(L.T("معاينة HTML في المتصفح", "HTML preview in browser"), Keys.Control | Keys.Shift | Keys.H, (_, _) => PreviewHtml()));
         edit.DropDownItems.Add(new ToolStripSeparator());
         edit.DropDownItems.Add(MI(L.T("تبديل اتجاه النص", "Toggle text direction"), Keys.Control | Keys.Shift | Keys.D, (_, _) => ToggleDirection()));
+        edit.DropDownItems.Add(MI(L.T("تبديل التفاف الأسطر", "Toggle word wrap"), Keys.Control | Keys.Shift | Keys.W, (_, _) => ToggleWrap()));
         edit.DropDownItems.Add(MI(L.T("تكبير الخط", "Increase font size"), Keys.Control | Keys.Oemplus, (_, _) => ChangeFont(+1), "Ctrl+="));
         edit.DropDownItems.Add(MI(L.T("تصغير الخط", "Decrease font size"), Keys.Control | Keys.OemMinus, (_, _) => ChangeFont(-1), "Ctrl+-"));
 
@@ -374,7 +376,7 @@ public class MainForm : Form
 
     // ---------- فتح وحفظ ----------
 
-    void OpenNote(string path, int line = -1)
+    void OpenNote(string path, int line = -1, bool announceOpen = true)
     {
         SaveCurrent();
         if (!File.Exists(path)) { Announce(L.T("الملف غير موجود", "File not found")); return; }
@@ -401,7 +403,8 @@ public class MainForm : Form
 
         SelectNodeFor(path);
         UpdateCount();
-        Announce(L.T($"فُتحت الملاحظة {vault.DisplayName(path)}", $"Opened note {vault.DisplayName(path)}"));
+        if (announceOpen)
+            Announce(L.T($"فُتحت الملاحظة {vault.DisplayName(path)}", $"Opened note {vault.DisplayName(path)}"));
     }
 
     void SaveCurrent(bool announce = false)
@@ -437,11 +440,13 @@ public class MainForm : Form
         var name = InputBox.Show(this, L.T("ملاحظة جديدة", "New note"), L.T("اسم الملاحظة الجديدة:", "Name of the new note:"));
         if (name == null) return;
         var path = vault.CreateNote(TargetFolder(), name, $"# {name}\r\n\r\n");
-        LoadTree();
-        OpenNote(path);
+        // التركيز إلى المحرر قبل تحديث الشجرة كي لا يعلن NVDA عقدة الشجرة الجديدة،
+        // والإعلان غير مقاطع كي يُسمع بعد إعلان NVDA لانتقال التركيز إلى المحرر
+        OpenNote(path, announceOpen: false);
         editor.SelectionStart = editor.TextLength;
         editor.Focus();
-        Announce(L.T($"أُنشئت الملاحظة {vault.DisplayName(path)}", $"Created note {vault.DisplayName(path)}"));
+        LoadTree();
+        Announce(L.T($"أُنشئت الملاحظة {vault.DisplayName(path)}", $"Created note {vault.DisplayName(path)}"), interrupt: false);
     }
 
     void NewFolder()
@@ -563,6 +568,7 @@ public class MainForm : Form
             return;
         }
         var path = vault.ResolveLink(target);
+        bool created = false;
         if (path == null)
         {
             var answer = MessageBox.Show(this,
@@ -571,10 +577,11 @@ public class MainForm : Form
                 MessageBoxDefaultButton.Button1, L.MsgOptions);
             if (answer != DialogResult.Yes) return;
             path = vault.CreateNote(vault.Root, target, $"# {target}\r\n\r\n");
-            LoadTree();
+            created = true;
         }
         OpenNote(path);
         editor.Focus();
+        if (created) LoadTree();
     }
 
     void InsertLink()
@@ -603,10 +610,10 @@ public class MainForm : Form
         else if (picker.CreateName != null)
         {
             var path = vault.CreateNote(vault.Root, picker.CreateName, $"# {picker.CreateName}\r\n\r\n");
-            LoadTree();
-            OpenNote(path);
+            OpenNote(path, announceOpen: false);
             editor.Focus();
-            Announce(L.T($"أُنشئت الملاحظة {vault.DisplayName(path)}", $"Created note {vault.DisplayName(path)}"));
+            LoadTree();
+            Announce(L.T($"أُنشئت الملاحظة {vault.DisplayName(path)}", $"Created note {vault.DisplayName(path)}"), interrupt: false);
         }
     }
 
@@ -726,13 +733,10 @@ public class MainForm : Form
                     : L.T($"بداية الملاحظة. {LineForSpeech(lines[0])}", $"Start of note. {LineForSpeech(lines[0])}"));
             return;
         }
+        // نعلن الفقرة الهدف بأنفسنا في كل انتقال: قراءة NVDA التلقائية بعد التحريك
+        // البرمجي للمؤشر غير موثوقة (كانت تصمت عند السطر الأول والفقرة الأخيرة)
         int targetLine = Math.Min(LineFromIndex(text, target), lines.Length - 1);
-        // صفوف الجداول نقرؤها بأنفسنا بصيغة نظيفة بدل ترك NVDA ينطق أعواد |
-        if (IsTableLine(lines[targetLine]))
-            Announce(LineForSpeech(lines[targetLine]));
-        // NVDA لا يقرأ السطر الأول تلقائياً عند القفز إليه بالفقرات، فنعلنه بأنفسنا
-        else if (target == 0 && !IsBlankLine(lines[0]))
-            Announce(lines[0]);
+        Announce(LineForSpeech(lines[targetLine]));
     }
 
     int selectionAnchor = -1;
@@ -834,14 +838,13 @@ public class MainForm : Form
         Directory.CreateDirectory(folder);
         var name = DateTime.Now.ToString("yyyy-MM-dd");
         var path = Path.Combine(folder, name + ".md");
-        if (!File.Exists(path))
-        {
+        bool created = !File.Exists(path);
+        if (created)
             File.WriteAllText(path, $"# {name}\r\n\r\n", new UTF8Encoding(false));
-            LoadTree();
-        }
         OpenNote(path);
         editor.SelectionStart = editor.TextLength;
         editor.Focus();
+        if (created) LoadTree();
     }
 
     void SearchVault()
@@ -1299,6 +1302,23 @@ public class MainForm : Form
             : L.T("اتجاه النص: من اليسار إلى اليمين", "Text direction: left to right"));
     }
 
+    /// <summary>
+    /// مع الالتفاف يُقسم السطر الطويل بصرياً على عرض النافذة فيقرؤه NVDA قطعاً قصيرة؛
+    /// تعطيله يجعل كل سطر منطقي يُقرأ كاملاً مهما طال.
+    /// </summary>
+    void ToggleWrap()
+    {
+        int caret = editor.SelectionStart; // تغيير الالتفاف يعيد إنشاء الحقل داخلياً
+        settings.WordWrap = !settings.WordWrap;
+        editor.WordWrap = settings.WordWrap;
+        editor.ScrollBars = settings.WordWrap ? ScrollBars.Vertical : ScrollBars.Both;
+        editor.Select(Math.Min(caret, editor.TextLength), 0);
+        settings.Save();
+        Announce(settings.WordWrap
+            ? L.T("التفاف الأسطر مفعّل: السطر الطويل يُقسم على عرض النافذة", "Word wrap on: long lines split at the window width")
+            : L.T("التفاف الأسطر معطّل: كل سطر يُقرأ كاملاً مهما طال", "Word wrap off: every line is read in full"));
+    }
+
     void ChangeFont(int delta)
     {
         var size = Math.Clamp(editor.Font.Size + delta, 8f, 40f);
@@ -1315,8 +1335,11 @@ public class MainForm : Form
         countLabel.Text = L.T($"الكلمات: {words} | الأحرف: {text.Length}", $"Words: {words} | Characters: {text.Length}");
     }
 
-    /// <summary>إعلان نصي يقرؤه NVDA فوراً عبر إشعارات UI Automation، مع عرضه في شريط الحالة.</summary>
-    void Announce(string message)
+    /// <summary>
+    /// إعلان نصي يقرؤه NVDA عبر إشعارات UI Automation، مع عرضه في شريط الحالة.
+    /// interrupt=false يجعل الإعلان ينتظر انتهاء كلام NVDA الجاري (مثل إعلان انتقال التركيز) بدل مقاطعته.
+    /// </summary>
+    void Announce(string message, bool interrupt = true)
     {
         statusLabel.Text = message;
         // الإشعار يصدر من العنصر الذي عليه التركيز ليضمن NVDA التقاطه وقراءته
@@ -1327,7 +1350,7 @@ public class MainForm : Form
         {
             source.AccessibilityObject.RaiseAutomationNotification(
                 AutomationNotificationKind.ActionCompleted,
-                AutomationNotificationProcessing.MostRecent,
+                interrupt ? AutomationNotificationProcessing.MostRecent : AutomationNotificationProcessing.All,
                 message);
         }
         catch { }
@@ -1403,6 +1426,9 @@ Ctrl+Shift+H — فتح الملاحظة بصيغة HTML في المتصفح
 
 العرض:
 Ctrl+Shift+D — تبديل اتجاه النص في المحرر
+Ctrl+Shift+W — تبديل التفاف الأسطر
+(مع الالتفاف يقرأ NVDA السطر الطويل قطعاً بعرض النافذة،
+وبدونه يقرأ كل سطر كاملاً مهما طال)
 Ctrl+= و Ctrl+- — تكبير وتصغير الخط
 
 ملاحظة: الملاحظات ملفات Markdown عادية في مجلد القبو،
@@ -1470,6 +1496,9 @@ and you can jump between headings with the H key)
 
 View:
 Ctrl+Shift+D — toggle editor text direction
+Ctrl+Shift+W — toggle word wrap
+(with wrap on NVDA reads long lines in window-width chunks,
+with wrap off every line is read in full)
 Ctrl+= and Ctrl+- — increase and decrease font size
 
 Note: notes are plain Markdown files in the vault folder,

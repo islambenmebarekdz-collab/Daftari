@@ -7,6 +7,7 @@ public class Settings
 {
     public string? VaultPath { get; set; }
     public bool EditorRightToLeft { get; set; } = true;
+    public bool WordWrap { get; set; } = true;
     public float FontSize { get; set; } = 13f;
     public List<string> RecentNotes { get; set; } = new();
     /// <summary>"ar" أو "en"</summary>
