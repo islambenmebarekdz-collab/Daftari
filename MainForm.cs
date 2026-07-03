@@ -379,6 +379,22 @@ public class MainForm : Form
         }
     }
 
+    /// <summary>
+    /// يجبر انتقال تركيز حقيقياً إلى المحرر بعد إغلاق الحوارات النمطية.
+    /// استدعاء Focus مباشرة بعد إغلاق حوار قد لا يُنتج حدث تركيز جديداً،
+    /// فيفقد NVDA التتبع: لا يردد الأحرف المكتوبة ولا يتابع حركة الأسهم.
+    /// نؤجل بالطابور ثم نفلت التركيز ونمسكه من جديد ليصدر حدث لا يفوته NVDA.
+    /// </summary>
+    void FocusEditorFresh(string announcement = "")
+    {
+        BeginInvoke(() =>
+        {
+            ActiveControl = null;
+            editor.Focus();
+            if (announcement.Length > 0) Announce(announcement, interrupt: false);
+        });
+    }
+
     // ---------- فتح وحفظ ----------
 
     void OpenNote(string path, int line = -1, bool announceOpen = true)
@@ -445,13 +461,12 @@ public class MainForm : Form
         var name = InputBox.Show(this, L.T("ملاحظة جديدة", "New note"), L.T("اسم الملاحظة الجديدة:", "Name of the new note:"));
         if (name == null) return;
         var path = vault.CreateNote(TargetFolder(), name, $"# {name}\r\n\r\n");
-        // التركيز إلى المحرر قبل تحديث الشجرة كي لا يعلن NVDA عقدة الشجرة الجديدة،
-        // والإعلان غير مقاطع كي يُسمع بعد إعلان NVDA لانتقال التركيز إلى المحرر
+        // الفتح وتحديث الشجرة أولاً، ثم انتقال تركيز حقيقي مؤجل إلى المحرر
+        // يعقبه إعلان غير مقاطع كي يُسمعا معاً بالترتيب
         OpenNote(path, announceOpen: false);
         editor.SelectionStart = editor.TextLength;
-        editor.Focus();
         LoadTree();
-        Announce(L.T($"أُنشئت الملاحظة {vault.DisplayName(path)}", $"Created note {vault.DisplayName(path)}"), interrupt: false);
+        FocusEditorFresh(L.T($"أُنشئت الملاحظة {vault.DisplayName(path)}", $"Created note {vault.DisplayName(path)}"));
     }
 
     void NewFolder()
@@ -585,8 +600,8 @@ public class MainForm : Form
             created = true;
         }
         OpenNote(path);
-        editor.Focus();
         if (created) LoadTree();
+        FocusEditorFresh();
     }
 
     void InsertLink()
@@ -597,8 +612,7 @@ public class MainForm : Form
         if (picker.ShowDialog(this) != DialogResult.OK || picker.SelectedPath == null) return;
         var name = vault.DisplayName(picker.SelectedPath);
         editor.SelectedText = $"[[{name}]]";
-        editor.Focus();
-        Announce(L.T($"أُدرج رابط إلى {name}", $"Inserted a link to {name}"));
+        FocusEditorFresh(L.T($"أُدرج رابط إلى {name}", $"Inserted a link to {name}"));
     }
 
     void QuickOpen()
@@ -610,15 +624,14 @@ public class MainForm : Form
         if (picker.SelectedPath != null)
         {
             OpenNote(picker.SelectedPath);
-            editor.Focus();
+            FocusEditorFresh();
         }
         else if (picker.CreateName != null)
         {
             var path = vault.CreateNote(vault.Root, picker.CreateName, $"# {picker.CreateName}\r\n\r\n");
             OpenNote(path, announceOpen: false);
-            editor.Focus();
             LoadTree();
-            Announce(L.T($"أُنشئت الملاحظة {vault.DisplayName(path)}", $"Created note {vault.DisplayName(path)}"), interrupt: false);
+            FocusEditorFresh(L.T($"أُنشئت الملاحظة {vault.DisplayName(path)}", $"Created note {vault.DisplayName(path)}"));
         }
     }
 
@@ -640,7 +653,7 @@ public class MainForm : Form
         if (dlg.ShowDialog(this) == DialogResult.OK && dlg.Result is SearchHit hit)
         {
             OpenNote(hit.FilePath, hit.LineNumber);
-            editor.Focus();
+            FocusEditorFresh();
         }
     }
 
@@ -816,7 +829,7 @@ public class MainForm : Form
         {
             editor.Select(LineStartIndex(editor.Text, line), 0);
             editor.ScrollToCaret();
-            editor.Focus();
+            FocusEditorFresh();
         }
     }
 
@@ -833,7 +846,7 @@ public class MainForm : Form
         if (dlg.ShowDialog(this) == DialogResult.OK && dlg.SelectedNote != null)
         {
             OpenNote(dlg.SelectedNote);
-            editor.Focus();
+            FocusEditorFresh();
         }
     }
 
@@ -859,7 +872,7 @@ public class MainForm : Form
         if (dlg.ShowDialog(this) == DialogResult.OK && dlg.Selected is SearchHit hit)
         {
             OpenNote(hit.FilePath, hit.LineNumber);
-            editor.Focus();
+            FocusEditorFresh();
         }
     }
 
@@ -869,6 +882,7 @@ public class MainForm : Form
         if (q == null) return;
         lastFind = q;
         FindNext();
+        FocusEditorFresh(); // بعد إغلاق حوار البحث قد يفقد NVDA تتبع المحرر
     }
 
     void FindNext()
@@ -986,7 +1000,7 @@ public class MainForm : Form
         if (dlg.ShowDialog(this) == DialogResult.OK && dlg.Result is string path)
         {
             OpenNote(path);
-            editor.Focus();
+            FocusEditorFresh();
         }
     }
 
@@ -1024,7 +1038,7 @@ public class MainForm : Form
             editor.Select(caret + prefix.Length, 0);
             Announce(L.T("أُدرجت كتلة كود، اكتب الكود الآن", "Code block inserted, type the code now"));
         }
-        editor.Focus();
+        FocusEditorFresh();
     }
 
     void InsertTimestamp()
@@ -1167,7 +1181,7 @@ public class MainForm : Form
             editor.Select(startIdx, endIdx - startIdx);
             editor.SelectedText = md;
             editor.Select(startIdx, 0);
-            editor.Focus();
+            FocusEditorFresh();
             Announce(L.T($"حُدّث الجدول: {dlg.ResultRows.Count} صف و{dlg.ResultHeaders.Length} عمود",
                          $"Table updated: {dlg.ResultRows.Count} rows and {dlg.ResultHeaders.Length} columns"));
         }
@@ -1185,7 +1199,7 @@ public class MainForm : Form
             int caret = editor.SelectionStart;
             bool atLineStart = caret == 0 || (caret <= text.Length && caret > 0 && text[caret - 1] == '\n');
             editor.SelectedText = (atLineStart ? "" : "\r\n") + md;
-            editor.Focus();
+            FocusEditorFresh();
             Announce(L.T($"أُدرج جدول: {dlg.ResultRows.Count} صف و{dlg.ResultHeaders.Length} عمود",
                          $"Table inserted: {dlg.ResultRows.Count} rows and {dlg.ResultHeaders.Length} columns"));
         }
