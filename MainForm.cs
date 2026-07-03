@@ -66,7 +66,9 @@ public class MainForm : Form
         {
             if (e.KeyCode == Keys.F6)
             {
-                if (editor.Focused) tree.Focus(); else editor.Focus();
+                // من الشجرة إلى المحرر، ومن أي مكان آخر إلى الشجرة —
+                // حتى لو ضاع التركيز في عنصر غير متوقع يبقى F6 مخرجاً مضموناً
+                if (tree.Focused) editor.Focus(); else tree.Focus();
                 e.SuppressKeyPress = true;
             }
             // Ctrl+Tab لا يصلح اختصار قائمة في WinForms، فنلتقطه على مستوى النافذة
@@ -118,7 +120,8 @@ public class MainForm : Form
             if (!editBurst)
             {
                 undoStack.Add((lastText, editor.SelectionStart));
-                if (undoStack.Count > 300) undoStack.RemoveAt(0);
+                // كل لقطة نسخة كاملة من النص، فنحد العمق حمايةً للذاكرة مع الملاحظات الكبيرة
+                if (undoStack.Count > 100) undoStack.RemoveAt(0);
                 redoStack.Clear();
                 editBurst = true;
             }
@@ -359,9 +362,11 @@ public class MainForm : Form
 
     void Tree_AfterSelect(object? sender, TreeViewEventArgs e)
     {
+        // الفتح من الشجرة صامت: NVDA يعلن عقدة الشجرة بنفسه،
+        // وإعلاننا "فُتحت الملاحظة" كان يقاطعه فتبدو الأسهم معطلة
         if (e.Node?.Tag is string path && File.Exists(path) &&
             !string.Equals(path, currentNote, StringComparison.OrdinalIgnoreCase))
-            OpenNote(path);
+            OpenNote(path, announceOpen: false);
     }
 
     void Tree_KeyDown(object? sender, KeyEventArgs e)
@@ -1054,7 +1059,9 @@ public class MainForm : Form
 
         // روابط الويكي ليست جزءاً من Markdown القياسي، فنعرضها كنص بارز
         var md = Regex.Replace(editor.Text, @"\[\[([^\]\|#]+)(?:[#|][^\]]*)?\]\]", "**$1**");
-        var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().Build();
+        // DisableHtml: وسوم HTML خام داخل الملاحظات تُعرض نصاً ولا تُنفذ —
+        // يمنع حقن سكربتات من ملاحظة واردة من قبو شخص آخر
+        var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().DisableHtml().Build();
         var body = MakeCollapsible(Markdown.ToHtml(md, pipeline));
 
         var dir1 = L.En ? "ltr" : "rtl";
@@ -1222,6 +1229,11 @@ public class MainForm : Form
         for (int i = start; i <= end; i++) block.Add(SplitTableRow(lines[i]));
 
         headers = block[0];
+        // جدول برؤوس أقل من خلايا صفوفه: نكمل الرؤوس كي لا تضيع الخلايا الزائدة عند التحرير
+        int width = block.Max(b => b.Length);
+        if (headers.Length < width)
+            headers = headers.Concat(Enumerable.Range(headers.Length + 1, width - headers.Length)
+                .Select(i => L.T($"عمود {i}", $"Column {i}"))).ToArray();
         int dataStart = block.Count > 1 && IsSeparatorRow(lines[start + 1]) ? 2 : 1;
         for (int i = dataStart; i < block.Count; i++) rows.Add(block[i]);
         return true;
@@ -1254,6 +1266,17 @@ public class MainForm : Form
                     "Set the backup folder in Settings first. Choose a folder inside Google Drive or OneDrive to sync backups to the cloud automatically."));
             OpenSettings();
             if (string.IsNullOrWhiteSpace(settings.BackupFolder)) return;
+        }
+        // مجلد نسخ داخل القبو نفسه يجعل الضغط يحاول ضم الملف الذي يكتبه فيفشل،
+        // وتتراكم النسخ القديمة داخل كل نسخة جديدة
+        var backupFull = Path.GetFullPath(settings.BackupFolder!);
+        var vaultFull = Path.GetFullPath(vault.Root);
+        if (string.Equals(backupFull, vaultFull, StringComparison.OrdinalIgnoreCase) ||
+            backupFull.StartsWith(vaultFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            Msg(L.T("مجلد النسخ الاحتياطي لا يصح أن يكون داخل مجلد القبو نفسه. اختر مجلداً خارجه من الإعدادات.",
+                    "The backup folder cannot be inside the vault itself. Choose a folder outside it in Settings."));
+            return;
         }
         try
         {
@@ -1321,8 +1344,10 @@ public class MainForm : Form
 
     void ChangeFont(int delta)
     {
-        var size = Math.Clamp(editor.Font.Size + delta, 8f, 40f);
-        editor.Font = new Font(editor.Font.FontFamily, size);
+        var old = editor.Font;
+        var size = Math.Clamp(old.Size + delta, 8f, 40f);
+        editor.Font = new Font(old.FontFamily, size);
+        old.Dispose();
         settings.FontSize = size;
         settings.Save();
         Announce(L.T($"حجم الخط {size}", $"Font size {size}"));
