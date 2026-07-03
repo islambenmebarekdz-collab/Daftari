@@ -1064,6 +1064,8 @@ public class MainForm : Form
             <title>{{WebUtility.HtmlEncode(name)}}</title>
             <style>
             body { font-family: 'Segoe UI', sans-serif; font-size: 18px; line-height: 1.9; max-width: 46em; margin: 2em auto; padding: 0 1em; color: #1f2937; }
+            /* كل فقرة تختار اتجاهها تلقائياً من محتواها: العربية يميناً والإنجليزية يساراً */
+            p, li, blockquote, h1, h2, h3, h4, h5, h6, td, th { unicode-bidi: plaintext; text-align: start; }
             code, pre { direction: ltr; font-size: 16px; }
             details { margin: 0.4em 0; }
             summary { cursor: pointer; }
@@ -1109,8 +1111,18 @@ public class MainForm : Form
                 result.Append("</details>");
                 stack.Pop();
             }
-            result.Append("<details open><summary>").Append(m.Value).Append("</summary>");
-            stack.Push(level);
+            if (level == 1)
+            {
+                // العنوان الرئيسي لا يُطوى: محتواه يبقى ظاهراً دائماً
+                result.Append(m.Value);
+            }
+            else
+            {
+                // الأقسام (مستوى 2) تبدأ مفتوحة، والتفاصيل العميقة (3 فأكثر) مطوية
+                result.Append(level == 2 ? "<details open><summary>" : "<details><summary>")
+                      .Append(m.Value).Append("</summary>");
+                stack.Push(level);
+            }
             pos = m.Index + m.Length;
         }
         result.Append(body, pos, body.Length - pos);
@@ -1384,7 +1396,9 @@ Ctrl+Shift+T — إدراج التاريخ والوقت الحاليين
 Ctrl+Shift+C — نسخ الملاحظة كاملة إلى الحافظة
 Ctrl+Shift+H — فتح الملاحظة بصيغة HTML في المتصفح
 (في المتصفح يقرأ NVDA العناوين والقوائم دلالياً بدون رموز،
-وكل قسم قابل للطي والتوسيع بضغط Enter على عنوانه،
+وكل قسم قابل للطي والتوسيع بضغط Enter على عنوانه؛
+العنوان الرئيسي لا يُطوى، والأقسام مستوى 2 تبدأ مفتوحة،
+والتفاصيل العميقة مستوى 3 فأكثر تبدأ مطوية داخل أقسامها،
 وتتنقل بين العناوين بحرف H كأي صفحة ويب)
 
 العرض:
@@ -1449,7 +1463,9 @@ Ctrl+Shift+T — insert current date and time
 Ctrl+Shift+C — copy the entire note
 Ctrl+Shift+H — open the note as HTML in the browser
 (NVDA reads headings and lists semantically there,
-each section collapses and expands with Enter on its heading,
+each section collapses and expands with Enter on its heading;
+the main title never collapses, level-2 sections start open,
+and deep sections of level 3+ start collapsed inside their parents,
 and you can jump between headings with the H key)
 
 View:
