@@ -223,6 +223,7 @@ public class MainForm : Form
         edit.DropDownItems.Add(MI(L.T("العثور على التالي", "Find next"), Keys.F3, (_, _) => FindNext()));
         edit.DropDownItems.Add(new ToolStripSeparator());
         edit.DropDownItems.Add(MI(L.T("إدراج رابط لملاحظة...", "Insert link to a note..."), Keys.Control | Keys.K, (_, _) => InsertLink()));
+        edit.DropDownItems.Add(MI(L.T("إدراج كتلة كود...", "Insert code block..."), Keys.Control | Keys.Shift | Keys.K, (_, _) => InsertCodeBlock()));
         edit.DropDownItems.Add(MI(L.T("جدول: إنشاء أو تحرير...", "Table: create or edit..."), Keys.Control | Keys.Shift | Keys.G, (_, _) => EditTable()));
         edit.DropDownItems.Add(MI(L.T("إدراج التاريخ والوقت", "Insert date and time"), Keys.Control | Keys.Shift | Keys.T, (_, _) => InsertTimestamp()));
         edit.DropDownItems.Add(MI(L.T("نسخ الملاحظة كاملة", "Copy entire note"), Keys.Control | Keys.Shift | Keys.C, (_, _) => CopyNote()));
@@ -981,6 +982,43 @@ public class MainForm : Form
         }
     }
 
+    /// <summary>
+    /// يدرج كتلة كود بأسوارها الثلاثية دون أن يكتب المستخدم علامة ` بنفسه —
+    /// عسيرة على لوحة المفاتيح العربية وفوضوية وسط نص يميني الاتجاه.
+    /// إن كان هناك نص محدد يُلَفّ داخل الكتلة مباشرة.
+    /// </summary>
+    void InsertCodeBlock()
+    {
+        if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
+        var lang = InputBox.Show(this,
+            L.T("كتلة كود", "Code block"),
+            L.T("لغة الكود (مثل python أو csharp — اتركها فارغة إن لم تهم):",
+                "Code language (like python or csharp — leave empty if not needed):"),
+            "", allowEmpty: true);
+        if (lang == null) return; // أُلغي الحوار
+
+        var text = editor.Text;
+        int caret = editor.SelectionStart;
+        var selected = editor.SelectedText;
+        bool atLineStart = caret == 0 || (caret > 0 && caret <= text.Length && text[caret - 1] == '\n');
+        var prefix = (atLineStart ? "" : "\r\n") + "```" + lang + "\r\n";
+
+        if (selected.Length > 0)
+        {
+            var body = selected.EndsWith("\r\n") ? selected : selected + "\r\n";
+            editor.SelectedText = prefix + body + "```\r\n";
+            Announce(L.T("لُفّ النص المحدد داخل كتلة كود", "Wrapped the selection in a code block"));
+        }
+        else
+        {
+            editor.SelectedText = prefix + "\r\n```\r\n";
+            // نعيد المؤشر إلى السطر الفارغ بين السورين ليكتب الكود مباشرة
+            editor.Select(caret + prefix.Length, 0);
+            Announce(L.T("أُدرجت كتلة كود، اكتب الكود الآن", "Code block inserted, type the code now"));
+        }
+        editor.Focus();
+    }
+
     void InsertTimestamp()
     {
         if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
@@ -1340,6 +1378,8 @@ Ctrl+Shift+G — جدول: إنشاء جدول جديد، أو تحرير الج
 والتطبيق يكتب رموز Markdown بنفسه — لا حاجة لكتابة أي عود |،
 ولقراءة الجداول بأريح طريقة افتحها بـ Ctrl+Shift+H في المتصفح
 وتنقل بين الخلايا بأوامر الجداول Ctrl+Alt+الأسهم)
+Ctrl+Shift+K — إدراج كتلة كود برمجي (يكتب الأسوار ``` بنفسه،
+وإن كان هناك نص محدد يلفّه داخل الكتلة مباشرة)
 Ctrl+Shift+T — إدراج التاريخ والوقت الحاليين
 Ctrl+Shift+C — نسخ الملاحظة كاملة إلى الحافظة
 Ctrl+Shift+H — فتح الملاحظة بصيغة HTML في المتصفح
@@ -1403,6 +1443,8 @@ Ctrl+Shift+G — table: create a new table, or edit the one at the caret
 and the app writes the Markdown syntax itself — no pipes needed;
 to read tables comfortably open them with Ctrl+Shift+H in the browser
 and move between cells with the table commands Ctrl+Alt+arrows)
+Ctrl+Shift+K — insert a code block (writes the ``` fences itself,
+and wraps the selection if text is selected)
 Ctrl+Shift+T — insert current date and time
 Ctrl+Shift+C — copy the entire note
 Ctrl+Shift+H — open the note as HTML in the browser

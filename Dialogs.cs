@@ -5,7 +5,7 @@ namespace Daftari;
 /// <summary>حوار إدخال نص بسيط، مُسمّى بالكامل لقارئ الشاشة.</summary>
 public static class InputBox
 {
-    public static string? Show(IWin32Window owner, string title, string prompt, string initial = "")
+    public static string? Show(IWin32Window owner, string title, string prompt, string initial = "", bool allowEmpty = false)
     {
         using var f = new Form
         {
@@ -27,7 +27,9 @@ public static class InputBox
         f.AcceptButton = ok;
         f.CancelButton = cancel;
         tb.SelectAll();
-        return f.ShowDialog(owner) == DialogResult.OK && tb.Text.Trim().Length > 0 ? tb.Text.Trim() : null;
+        if (f.ShowDialog(owner) != DialogResult.OK) return null;
+        var result = tb.Text.Trim();
+        return result.Length > 0 || allowEmpty ? result : null;
     }
 }
 
