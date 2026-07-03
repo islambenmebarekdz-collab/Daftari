@@ -516,9 +516,27 @@ public class MainForm : Form
             else if (!isFile && currentNote.StartsWith(path + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 currentNote = dest + currentNote[path.Length..];
         }
+
+        // تحديث كل روابط [[الاسم القديم]] في القبو كي لا تنكسر بصمت
+        int updatedLinks = isFile ? vault.UpdateLinks(oldName, newName) : 0;
+        if (updatedLinks > 0 && currentNote != null && File.Exists(currentNote))
+        {
+            // الملاحظة المفتوحة قد تكون من الملفات المحدّثة على القرص — نعيد تحميلها بموضع المؤشر
+            int caret = editor.SelectionStart;
+            loading = true;
+            editor.Text = File.ReadAllText(currentNote).Replace("\r\n", "\n").Replace("\n", "\r\n");
+            loading = false;
+            dirty = false;
+            ResetHistory();
+            editor.Select(Math.Min(caret, editor.TextLength), 0);
+        }
+
         LoadTree();
         if (currentNote != null) Text = $"{vault.DisplayName(currentNote)} — {L.T("دفتري", "Daftari")}";
-        Announce(L.T($"تمت إعادة التسمية إلى {newName}", $"Renamed to {newName}"));
+        Announce(updatedLinks > 0
+            ? L.T($"تمت إعادة التسمية إلى {newName} وتحديث {updatedLinks} رابط يشير إليها",
+                  $"Renamed to {newName} and updated {updatedLinks} links pointing to it")
+            : L.T($"تمت إعادة التسمية إلى {newName}", $"Renamed to {newName}"));
     }
 
     void DeleteSelected()
