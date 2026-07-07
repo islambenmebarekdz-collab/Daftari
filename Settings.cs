@@ -8,6 +8,8 @@ public class Settings
     public string? VaultPath { get; set; }
     public bool EditorRightToLeft { get; set; } = true;
     public bool WordWrap { get; set; } = true;
+    public int SplitterDistance { get; set; } = 280;
+    public bool TreeHidden { get; set; }
     public float FontSize { get; set; } = 13f;
     public List<string> RecentNotes { get; set; } = new();
     /// <summary>"ar" أو "en"</summary>

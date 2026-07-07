@@ -68,7 +68,7 @@ public class MainForm : Form
             {
                 // من الشجرة إلى المحرر، ومن أي مكان آخر إلى الشجرة —
                 // حتى لو ضاع التركيز في عنصر غير متوقع يبقى F6 مخرجاً مضموناً
-                if (tree.Focused) editor.Focus(); else tree.Focus();
+                if (tree.Focused) editor.Focus(); else FocusTree();
                 e.SuppressKeyPress = true;
             }
             // Ctrl+Tab لا يصلح اختصار قائمة في WinForms، فنلتقطه على مستوى النافذة
@@ -177,9 +177,13 @@ public class MainForm : Form
         split.BackColor = Color.FromArgb(226, 228, 232);
         split.Panel1.BackColor = tree.BackColor;
         split.Panel1.Padding = new Padding(6);
-        split.SplitterDistance = 280;
         split.Panel1.Controls.Add(tree);
         split.Panel2.Controls.Add(editorHost);
+        // ضبط أبعاد الفاصل يؤجَّل إلى Load: تعيين SplitterDistance/MinSize يتطلب
+        // أن يكون للفاصل عرضه النهائي، وإلا رمى استثناء يُسقط التطبيق عند الإقلاع.
+        Load += (_, _) => ApplySavedLayout();
+        // حفظ موضع الفاصل عند تحريكه (يبقى محفوظاً بين الجلسات)
+        split.SplitterMoved += (_, _) => { if (!split.Panel1Collapsed) settings.SplitterDistance = split.SplitterDistance; };
 
         statusStrip.SizingGrip = false;
         statusStrip.Items.Add(statusLabel);
@@ -252,7 +256,8 @@ public class MainForm : Form
         nav.DropDownItems.Add(MI(L.T("البحث في كل الملاحظات...", "Search all notes..."), Keys.Control | Keys.Shift | Keys.F, (_, _) => SearchVault()));
         nav.DropDownItems.Add(new ToolStripSeparator());
         nav.DropDownItems.Add(MI(L.T("الانتقال إلى المحرر", "Go to editor"), Keys.Control | Keys.E, (_, _) => editor.Focus()));
-        nav.DropDownItems.Add(MI(L.T("الانتقال إلى شجرة الملاحظات", "Go to notes tree"), Keys.Control | Keys.Shift | Keys.E, (_, _) => tree.Focus()));
+        nav.DropDownItems.Add(MI(L.T("الانتقال إلى شجرة الملاحظات", "Go to notes tree"), Keys.Control | Keys.Shift | Keys.E, (_, _) => FocusTree()));
+        nav.DropDownItems.Add(MI(L.T("إظهار أو إخفاء شجرة الملاحظات", "Show or hide the notes tree"), Keys.Control | Keys.Shift | Keys.S, (_, _) => ToggleTree()));
 
         var help = new ToolStripMenuItem(L.T("&مساعدة", "&Help"));
         help.DropDownItems.Add(MI(L.T("الاختصارات", "Shortcuts"), Keys.F1, (_, _) => new HelpForm(HelpText).ShowDialog(this)));
@@ -1346,6 +1351,37 @@ public class MainForm : Form
 
     // ---------- العرض والإعلانات ----------
 
+    /// <summary>يطبّق أبعاد الفاصل وحالة إخفاء الشجرة المحفوظة، بعد أن يصير للفاصل عرضه النهائي.</summary>
+    void ApplySavedLayout()
+    {
+        split.Panel1MinSize = 120;
+        split.Panel2MinSize = 240;
+        int max = split.Width - split.Panel2MinSize - split.SplitterWidth;
+        if (max > split.Panel1MinSize)
+            split.SplitterDistance = Math.Clamp(settings.SplitterDistance, split.Panel1MinSize, max);
+        split.Panel1Collapsed = settings.TreeHidden;
+    }
+
+    /// <summary>ينقل التركيز إلى الشجرة، ويظهرها أولاً إن كانت مخفية.</summary>
+    void FocusTree()
+    {
+        if (split.Panel1Collapsed) ToggleTree();
+        tree.Focus();
+    }
+
+    /// <summary>يُظهر أو يُخفي شجرة الملاحظات فيمنح المحرر كامل النافذة؛ الحالة محفوظة بين الجلسات.</summary>
+    void ToggleTree()
+    {
+        bool hide = !split.Panel1Collapsed;
+        if (hide && tree.Focused) editor.Focus(); // لا نترك التركيز في لوحة ستُخفى
+        split.Panel1Collapsed = hide;
+        settings.TreeHidden = hide;
+        settings.Save();
+        Announce(hide
+            ? L.T("أُخفيت شجرة الملاحظات، المحرر يملأ النافذة", "Notes tree hidden, the editor fills the window")
+            : L.T("ظهرت شجرة الملاحظات", "Notes tree shown"));
+    }
+
     void ToggleDirection()
     {
         bool rtl = editor.RightToLeft != RightToLeft.Yes;
@@ -1444,6 +1480,7 @@ Ctrl+R — الملاحظات الأخيرة
 Ctrl+I — أين أنا؟ (اسم الملاحظة والقسم والسطر وعدد الكلمات)
 Ctrl+E — الانتقال إلى المحرر
 Ctrl+Shift+E — الانتقال إلى شجرة الملاحظات
+Ctrl+Shift+S — إظهار أو إخفاء شجرة الملاحظات (يمنح المحرر كامل النافذة)
 F6 — التبديل بين الشجرة والمحرر
 Ctrl+سهم لأعلى أو لأسفل — التنقل بين الفقرات
 Alt+سهم لأعلى أو لأسفل — القفز بين العناوين
@@ -1514,6 +1551,7 @@ Ctrl+R — recent notes
 Ctrl+I — where am I? (note, section, line, word count)
 Ctrl+E — go to the editor
 Ctrl+Shift+E — go to the notes tree
+Ctrl+Shift+S — show or hide the notes tree (gives the editor the full window)
 F6 — switch between tree and editor
 Ctrl+Up or Down arrow — move between paragraphs
 Alt+Up or Down arrow — jump between headings
