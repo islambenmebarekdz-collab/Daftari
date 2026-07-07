@@ -122,16 +122,35 @@ public class Vault
         return path;
     }
 
+    /// <summary>
+    /// مسار غير مستخدم داخل مجلد الوجهة: يعيد الاسم كما هو إن كان حراً،
+    /// وإلا يضيف لاحقة رقمية متزايدة (2، 3...) حتى يجد اسماً حراً — مضمون التفرّد بلا اعتماد على الوقت.
+    /// </summary>
+    static string UniqueDestination(string destFolder, string fileName)
+    {
+        var dest = Path.Combine(destFolder, fileName);
+        if (!File.Exists(dest) && !Directory.Exists(dest)) return dest;
+        var stem = Path.GetFileNameWithoutExtension(fileName);
+        var ext = Path.GetExtension(fileName);
+        for (int i = 2; ; i++)
+        {
+            dest = Path.Combine(destFolder, $"{stem} {i}{ext}");
+            if (!File.Exists(dest) && !Directory.Exists(dest)) return dest;
+        }
+    }
+
+    static void MovePath(string source, string dest)
+    {
+        if (Directory.Exists(source)) Directory.Move(source, dest);
+        else File.Move(source, dest);
+    }
+
     /// <summary>ينقل ملفاً أو مجلداً إلى مجلد المحذوفات داخل القبو (حذف قابل للاسترجاع).</summary>
     public string MoveToTrash(string path)
     {
         Directory.CreateDirectory(TrashPath);
-        var dest = Path.Combine(TrashPath, Path.GetFileName(path));
-        if (File.Exists(dest) || Directory.Exists(dest))
-            dest = Path.Combine(TrashPath,
-                $"{Path.GetFileNameWithoutExtension(path)} {DateTime.Now:yyyyMMdd-HHmmss}{Path.GetExtension(path)}");
-        if (Directory.Exists(path)) Directory.Move(path, dest);
-        else File.Move(path, dest);
+        var dest = UniqueDestination(TrashPath, Path.GetFileName(path));
+        MovePath(path, dest);
         return dest;
     }
 
@@ -180,6 +199,74 @@ public class Vault
             }
         }
         return result;
+    }
+
+    /// <summary>كل المجلدات داخل القبو (يشمل الجذر، ويستبعد المحذوفات والمخفية) — لوجهات النقل.</summary>
+    public IEnumerable<string> AllFolders()
+    {
+        yield return Root;
+        foreach (var d in Directory.EnumerateDirectories(Root, "*", SearchOption.AllDirectories))
+        {
+            var rel = Path.GetRelativePath(Root, d);
+            bool excluded = false;
+            foreach (var part in rel.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+                if (part.StartsWith('.') || string.Equals(part, TrashFolderName, StringComparison.OrdinalIgnoreCase))
+                { excluded = true; break; }
+            if (!excluded) yield return d;
+        }
+    }
+
+    /// <summary>هل يجوز نقل المصدر إلى المجلد الوجهة؟ يمنع نقل مجلد إلى نفسه أو أحد أبنائه، أو نقلٍ بلا فائدة.</summary>
+    public bool CanMoveInto(string source, string destFolder, out string reason)
+    {
+        reason = "";
+        var src = Path.GetFullPath(source);
+        var dest = Path.GetFullPath(destFolder);
+        if (string.Equals(Path.GetDirectoryName(src), dest, StringComparison.OrdinalIgnoreCase))
+        { reason = "same"; return false; }
+        if (Directory.Exists(src))
+        {
+            if (string.Equals(src, dest, StringComparison.OrdinalIgnoreCase) ||
+                dest.StartsWith(src + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            { reason = "descendant"; return false; }
+        }
+        return true;
+    }
+
+    /// <summary>ينقل ملاحظة أو مجلداً إلى مجلد آخر، مع لاحقة رقمية عند تعارض الأسماء. يعيد المسار الجديد.</summary>
+    public string MoveTo(string source, string destFolder)
+    {
+        Directory.CreateDirectory(destFolder);
+        var dest = UniqueDestination(destFolder, Path.GetFileName(source));
+        MovePath(source, dest);
+        return dest;
+    }
+
+    /// <summary>عناصر مجلد المحذوفات (ملفات ومجلدات المستوى الأول).</summary>
+    public IEnumerable<string> TrashItems()
+    {
+        if (!Directory.Exists(TrashPath)) yield break;
+        foreach (var d in Directory.EnumerateDirectories(TrashPath)) yield return d;
+        foreach (var f in Directory.EnumerateFiles(TrashPath)) yield return f;
+    }
+
+    /// <summary>يعيد عنصراً محذوفاً إلى جذر القبو، مع لاحقة رقمية عند تعارض الأسماء. يعيد المسار الجديد.</summary>
+    public string RestoreFromTrash(string path)
+    {
+        var dest = UniqueDestination(Root, Path.GetFileName(path));
+        MovePath(path, dest);
+        return dest;
+    }
+
+    public void DeletePermanently(string path)
+    {
+        if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        else if (File.Exists(path)) File.Delete(path);
+    }
+
+    public void EmptyTrash()
+    {
+        foreach (var p in TrashItems().ToList()) DeletePermanently(p);
     }
 
     /// <summary>

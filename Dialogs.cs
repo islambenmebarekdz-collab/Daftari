@@ -713,3 +713,161 @@ public class SettingsForm : Form
         settings.Save();
     }
 }
+
+/// <summary>
+/// مدير المحذوفات: قائمة يقرؤها NVDA بالعناصر المحذوفة، مع استرجاع أو حذف نهائي أو إفراغ.
+/// </summary>
+public class TrashForm : Form
+{
+    readonly Vault vault;
+    readonly ListBox list = new();
+    readonly List<string> items = new();
+    readonly Button restoreBtn = new();
+    readonly Button deleteBtn = new();
+    readonly Button emptyBtn = new();
+
+    /// <summary>هل تغيّرت السلة (استرجاع/حذف) فتحتاج الشجرة تحديثاً؟</summary>
+    public bool Changed { get; private set; }
+
+    public TrashForm(Vault vault)
+    {
+        this.vault = vault;
+        Text = L.T("المحذوفات", "Trash");
+        RightToLeft = L.Rtl;
+        RightToLeftLayout = L.RtlLayout;
+        StartPosition = FormStartPosition.CenterParent;
+        ShowInTaskbar = false;
+        MinimizeBox = false;
+        ClientSize = new Size(620, 460);
+        KeyPreview = true;
+
+        list.Dock = DockStyle.Fill;
+        list.AccessibleName = L.T("العناصر المحذوفة", "Deleted items");
+        list.IntegralHeight = false;
+
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(8, 6, 8, 6) };
+        restoreBtn.Text = L.T("استرجاع", "Restore");
+        restoreBtn.AutoSize = true;
+        restoreBtn.Click += (_, _) => Restore();
+        deleteBtn.Text = L.T("حذف نهائي", "Delete permanently");
+        deleteBtn.AutoSize = true;
+        deleteBtn.Click += (_, _) => DeletePerm();
+        emptyBtn.Text = L.T("إفراغ المحذوفات", "Empty trash");
+        emptyBtn.AutoSize = true;
+        emptyBtn.Click += (_, _) => Empty();
+        var close = new Button { Text = L.T("إغلاق", "Close"), AutoSize = true, DialogResult = DialogResult.Cancel };
+        buttons.Controls.AddRange(new Control[] { restoreBtn, deleteBtn, emptyBtn, close });
+
+        Controls.Add(list);
+        Controls.Add(buttons);
+        CancelButton = close;
+
+        list.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter) { Restore(); e.SuppressKeyPress = true; }
+            else if (e.KeyCode == Keys.Delete) { DeletePerm(); e.SuppressKeyPress = true; }
+        };
+        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); } };
+
+        Refill();
+        Shown += (_, _) => list.Focus();
+    }
+
+    void Refill()
+    {
+        list.BeginUpdate();
+        list.Items.Clear();
+        items.Clear();
+        foreach (var p in vault.TrashItems().OrderByDescending(GetTime))
+        {
+            items.Add(p);
+            var kind = Directory.Exists(p) ? L.T("مجلد", "folder") : L.T("ملاحظة", "note");
+            var name = Directory.Exists(p) ? Path.GetFileName(p) : Path.GetFileNameWithoutExtension(p);
+            var when = GetTime(p).ToString("yyyy-MM-dd HH:mm");
+            list.Items.Add($"{name} — {kind} — {when}");
+        }
+        list.EndUpdate();
+        bool any = items.Count > 0;
+        restoreBtn.Enabled = deleteBtn.Enabled = emptyBtn.Enabled = any;
+        if (any) list.SelectedIndex = 0;
+        else list.Items.Add(L.T("لا توجد عناصر محذوفة", "No deleted items"));
+    }
+
+    static DateTime GetTime(string p)
+    {
+        try { return Directory.Exists(p) ? Directory.GetLastWriteTime(p) : File.GetLastWriteTime(p); }
+        catch { return DateTime.MinValue; }
+    }
+
+    string? Selected => list.SelectedIndex >= 0 && list.SelectedIndex < items.Count ? items[list.SelectedIndex] : null;
+
+    void Restore()
+    {
+        var p = Selected;
+        if (p == null) return;
+        try
+        {
+            var dest = vault.RestoreFromTrash(p);
+            Changed = true;
+            var name = Directory.Exists(dest) ? Path.GetFileName(dest) : Path.GetFileNameWithoutExtension(dest);
+            Refill();
+            Say(L.T($"استُرجع {name} إلى جذر القبو", $"Restored {name} to the vault root"));
+        }
+        catch (Exception ex) { Fail(ex); }
+    }
+
+    void DeletePerm()
+    {
+        var p = Selected;
+        if (p == null) return;
+        var name = Directory.Exists(p) ? Path.GetFileName(p) : Path.GetFileNameWithoutExtension(p);
+        var answer = MessageBox.Show(this,
+            L.T($"حذف \"{name}\" نهائياً؟ لا يمكن التراجع.", $"Delete \"{name}\" permanently? This cannot be undone."),
+            L.T("حذف نهائي", "Delete permanently"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2, L.MsgOptions);
+        if (answer != DialogResult.Yes) return;
+        try
+        {
+            vault.DeletePermanently(p);
+            Changed = true;
+            Refill();
+            Say(L.T($"حُذف {name} نهائياً", $"{name} permanently deleted"));
+        }
+        catch (Exception ex) { Fail(ex); }
+    }
+
+    void Empty()
+    {
+        if (items.Count == 0) return;
+        var answer = MessageBox.Show(this,
+            L.T($"إفراغ المحذوفات نهائياً؟ سيُمحى {items.Count} عنصراً بلا رجعة.",
+                $"Empty the trash permanently? {items.Count} items will be erased with no undo."),
+            L.T("إفراغ المحذوفات", "Empty trash"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2, L.MsgOptions);
+        if (answer != DialogResult.Yes) return;
+        try
+        {
+            vault.EmptyTrash();
+            Changed = true;
+            Refill();
+            Say(L.T("أُفرغت المحذوفات", "Trash emptied"));
+        }
+        catch (Exception ex) { Fail(ex); }
+    }
+
+    void Fail(Exception ex) =>
+        MessageBox.Show(this, L.T("تعذّرت العملية: ", "Operation failed: ") + ex.Message,
+            L.T("المحذوفات", "Trash"), MessageBoxButtons.OK, MessageBoxIcon.Error,
+            MessageBoxDefaultButton.Button1, L.MsgOptions);
+
+    void Say(string message)
+    {
+        try
+        {
+            list.AccessibilityObject.RaiseAutomationNotification(
+                AutomationNotificationKind.ActionCompleted,
+                AutomationNotificationProcessing.MostRecent, message);
+        }
+        catch { }
+    }
+}

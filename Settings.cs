@@ -10,6 +10,11 @@ public class Settings
     public bool WordWrap { get; set; } = true;
     public int SplitterDistance { get; set; } = 280;
     public bool TreeHidden { get; set; }
+    /// <summary>"name" أو "modified" أو "created"</summary>
+    public string SortKey { get; set; } = "name";
+    public bool SortDescending { get; set; }
+    /// <summary>"folders" (المجلدات أولاً) أو "notes" (الملاحظات أولاً) أو "mixed"</summary>
+    public string Grouping { get; set; } = "folders";
     public float FontSize { get; set; } = 13f;
     public List<string> RecentNotes { get; set; } = new();
     /// <summary>"ar" أو "en"</summary>

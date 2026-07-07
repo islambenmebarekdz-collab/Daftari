@@ -97,6 +97,16 @@ public class MainForm : Form
         tree.FullRowSelect = true;
         tree.AfterSelect += Tree_AfterSelect;
         tree.KeyDown += Tree_KeyDown;
+        tree.ContextMenuStrip = BuildTreeContextMenu();
+        // النقر بالزر الأيمن يحدّد العقدة تحته أولاً كي تعمل قائمة السياق عليها
+        tree.MouseDown += (_, e) =>
+        {
+            if (e.Button == MouseButtons.Right)
+            {
+                var n = tree.GetNodeAt(e.X, e.Y);
+                if (n != null) tree.SelectedNode = n;
+            }
+        };
 
         editor.Multiline = true;
         editor.WordWrap = settings.WordWrap;
@@ -210,6 +220,8 @@ public class MainForm : Form
         file.DropDownItems.Add(MI(L.T("ملاحظة جديدة...", "New note..."), Keys.Control | Keys.N, (_, _) => NewNote()));
         file.DropDownItems.Add(MI(L.T("مجلد جديد...", "New folder..."), Keys.Control | Keys.Shift | Keys.N, (_, _) => NewFolder()));
         file.DropDownItems.Add(MI(L.T("إعادة تسمية...", "Rename..."), Keys.F2, (_, _) => RenameSelected()));
+        file.DropDownItems.Add(MI(L.T("نقل إلى...", "Move to..."), Keys.Control | Keys.Shift | Keys.M, (_, _) => MoveSelected()));
+        file.DropDownItems.Add(MI(L.T("إظهار في مستكشف الملفات", "Show in File Explorer"), Keys.None, (_, _) => RevealSelected()));
         file.DropDownItems.Add(MI(L.T("حذف (نقل إلى المحذوفات)", "Delete (move to trash)"), Keys.None, (_, _) => DeleteSelected(), "Delete"));
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(MI(L.T("حفظ", "Save"), Keys.Control | Keys.S, (_, _) => SaveCurrent(announce: true)));
@@ -220,6 +232,7 @@ public class MainForm : Form
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(MI(L.T("فتح قبو آخر...", "Open another vault..."), Keys.Control | Keys.O, (_, _) => ChooseVault()));
         file.DropDownItems.Add(MI(L.T("فتح مجلد القبو في مستكشف الملفات", "Open vault folder in File Explorer"), Keys.None, (_, _) => Process.Start("explorer.exe", vault.Root)));
+        file.DropDownItems.Add(MI(L.T("المحذوفات...", "Trash..."), Keys.None, (_, _) => OpenTrash()));
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(MI(L.T("خروج", "Exit"), Keys.None, (_, _) => Close(), "Alt+F4"));
 
@@ -236,11 +249,16 @@ public class MainForm : Form
         edit.DropDownItems.Add(MI(L.T("إدراج التاريخ والوقت", "Insert date and time"), Keys.Control | Keys.Shift | Keys.T, (_, _) => InsertTimestamp()));
         edit.DropDownItems.Add(MI(L.T("نسخ الملاحظة كاملة", "Copy entire note"), Keys.Control | Keys.Shift | Keys.C, (_, _) => CopyNote()));
         edit.DropDownItems.Add(MI(L.T("معاينة HTML في المتصفح", "HTML preview in browser"), Keys.Control | Keys.Shift | Keys.H, (_, _) => PreviewHtml()));
-        edit.DropDownItems.Add(new ToolStripSeparator());
-        edit.DropDownItems.Add(MI(L.T("تبديل اتجاه النص", "Toggle text direction"), Keys.Control | Keys.Shift | Keys.D, (_, _) => ToggleDirection()));
-        edit.DropDownItems.Add(MI(L.T("تبديل التفاف الأسطر", "Toggle word wrap"), Keys.Control | Keys.Shift | Keys.W, (_, _) => ToggleWrap()));
-        edit.DropDownItems.Add(MI(L.T("تكبير الخط", "Increase font size"), Keys.Control | Keys.Oemplus, (_, _) => ChangeFont(+1), "Ctrl+="));
-        edit.DropDownItems.Add(MI(L.T("تصغير الخط", "Decrease font size"), Keys.Control | Keys.OemMinus, (_, _) => ChangeFont(-1), "Ctrl+-"));
+
+        var view = new ToolStripMenuItem(L.T("&عرض", "&View"));
+        view.DropDownItems.Add(BuildSortMenu());
+        view.DropDownItems.Add(new ToolStripSeparator());
+        view.DropDownItems.Add(MI(L.T("تبديل اتجاه النص", "Toggle text direction"), Keys.Control | Keys.Shift | Keys.D, (_, _) => ToggleDirection()));
+        view.DropDownItems.Add(MI(L.T("تبديل التفاف الأسطر", "Toggle word wrap"), Keys.Control | Keys.Shift | Keys.W, (_, _) => ToggleWrap()));
+        view.DropDownItems.Add(MI(L.T("تكبير الخط", "Increase font size"), Keys.Control | Keys.Oemplus, (_, _) => ChangeFont(+1), "Ctrl+="));
+        view.DropDownItems.Add(MI(L.T("تصغير الخط", "Decrease font size"), Keys.Control | Keys.OemMinus, (_, _) => ChangeFont(-1), "Ctrl+-"));
+        view.DropDownItems.Add(new ToolStripSeparator());
+        view.DropDownItems.Add(MI(L.T("إظهار أو إخفاء شجرة الملاحظات", "Show or hide the notes tree"), Keys.Control | Keys.Shift | Keys.S, (_, _) => ToggleTree()));
 
         var nav = new ToolStripMenuItem(L.T("&انتقال", "&Navigate"));
         nav.DropDownItems.Add(MI(L.T("فتح ملاحظة بسرعة...", "Quick open note..."), Keys.Control | Keys.P, (_, _) => QuickOpen()));
@@ -257,7 +275,6 @@ public class MainForm : Form
         nav.DropDownItems.Add(new ToolStripSeparator());
         nav.DropDownItems.Add(MI(L.T("الانتقال إلى المحرر", "Go to editor"), Keys.Control | Keys.E, (_, _) => editor.Focus()));
         nav.DropDownItems.Add(MI(L.T("الانتقال إلى شجرة الملاحظات", "Go to notes tree"), Keys.Control | Keys.Shift | Keys.E, (_, _) => FocusTree()));
-        nav.DropDownItems.Add(MI(L.T("إظهار أو إخفاء شجرة الملاحظات", "Show or hide the notes tree"), Keys.Control | Keys.Shift | Keys.S, (_, _) => ToggleTree()));
 
         var help = new ToolStripMenuItem(L.T("&مساعدة", "&Help"));
         help.DropDownItems.Add(MI(L.T("الاختصارات", "Shortcuts"), Keys.F1, (_, _) => new HelpForm(HelpText).ShowDialog(this)));
@@ -265,7 +282,88 @@ public class MainForm : Form
             Msg(L.T("دفتري — تطبيق ملاحظات عربي متوافق مع قارئ الشاشة NVDA.\nالملاحظات ملفات Markdown عادية داخل مجلد القبو، متوافقة مع Obsidian.",
                     "Daftari — an Arabic-first note-taking app built for the NVDA screen reader.\nNotes are plain Markdown files inside the vault folder, compatible with Obsidian."))));
 
-        menu.Items.AddRange(new ToolStripItem[] { file, edit, nav, help });
+        menu.Items.AddRange(new ToolStripItem[] { file, edit, view, nav, help });
+    }
+
+    /// <summary>قائمة الترتيب: ثلاث مجموعات خيارات محدّدة (radio) يعلنها NVDA، تُطبَّق فوراً وتُحفظ.</summary>
+    ToolStripMenuItem BuildSortMenu()
+    {
+        var sort = new ToolStripMenuItem(L.T("ترتيب الملاحظات", "Sort notes"));
+
+        ToolStripMenuItem Radio(string text, Func<bool> isOn, Action apply)
+        {
+            var mi = new ToolStripMenuItem(text) { Tag = isOn };
+            mi.Click += (_, _) =>
+            {
+                apply();
+                settings.Save();
+                LoadTree();
+                Announce(text);
+            };
+            return mi;
+        }
+
+        sort.DropDownItems.Add(Radio(L.T("حسب الاسم", "By name"), () => settings.SortKey == "name", () => settings.SortKey = "name"));
+        sort.DropDownItems.Add(Radio(L.T("حسب تاريخ التعديل", "By modified date"), () => settings.SortKey == "modified", () => settings.SortKey = "modified"));
+        sort.DropDownItems.Add(Radio(L.T("حسب تاريخ الإنشاء", "By created date"), () => settings.SortKey == "created", () => settings.SortKey = "created"));
+        sort.DropDownItems.Add(new ToolStripSeparator());
+        sort.DropDownItems.Add(Radio(L.T("تصاعدي", "Ascending"), () => !settings.SortDescending, () => settings.SortDescending = false));
+        sort.DropDownItems.Add(Radio(L.T("تنازلي", "Descending"), () => settings.SortDescending, () => settings.SortDescending = true));
+        sort.DropDownItems.Add(new ToolStripSeparator());
+        sort.DropDownItems.Add(Radio(L.T("المجلدات أولاً", "Folders first"), () => settings.Grouping == "folders", () => settings.Grouping = "folders"));
+        sort.DropDownItems.Add(Radio(L.T("الملاحظات أولاً", "Notes first"), () => settings.Grouping == "notes", () => settings.Grouping = "notes"));
+        sort.DropDownItems.Add(Radio(L.T("مختلط", "Mixed"), () => settings.Grouping == "mixed", () => settings.Grouping = "mixed"));
+
+        // تحديث علامات الاختيار من الإعدادات الحالية عند كل فتح للقائمة
+        sort.DropDownOpening += (_, _) =>
+        {
+            foreach (var item in sort.DropDownItems.OfType<ToolStripMenuItem>())
+                if (item.Tag is Func<bool> on) item.Checked = on();
+        };
+        return sort;
+    }
+
+    /// <summary>قائمة سياق الشجرة (مفتاح Applications أو Shift+F10) تتكيّف مع نوع العنصر المحدد.</summary>
+    ContextMenuStrip BuildTreeContextMenu()
+    {
+        var cm = new ContextMenuStrip { RightToLeft = L.Rtl };
+        ToolStripMenuItem Item(string text, Action onClick) => new(text, null, (_, _) => onClick());
+
+        cm.Opening += (_, e) =>
+        {
+            cm.Items.Clear();
+            if (tree.SelectedNode?.Tag is not string path) { e.Cancel = true; return; }
+            bool isRoot = string.Equals(path, vault.Root, StringComparison.OrdinalIgnoreCase);
+            bool isFolder = Directory.Exists(path);
+            bool isNote = File.Exists(path);
+
+            if (isNote)
+            {
+                cm.Items.Add(Item(L.T("فتح كـ HTML في المتصفح", "Open as HTML in browser"), PreviewHtml));
+                cm.Items.Add(Item(L.T("إعادة تسمية...", "Rename..."), RenameSelected));
+                cm.Items.Add(Item(L.T("نقل إلى...", "Move to..."), MoveSelected));
+                cm.Items.Add(Item(L.T("إظهار في مستكشف الملفات", "Show in File Explorer"), RevealSelected));
+                cm.Items.Add(new ToolStripSeparator());
+                cm.Items.Add(Item(L.T("حذف", "Delete"), DeleteSelected));
+            }
+            else if (isFolder || isRoot)
+            {
+                cm.Items.Add(Item(L.T("ملاحظة جديدة هنا...", "New note here..."), NewNote));
+                cm.Items.Add(Item(L.T("مجلد جديد هنا...", "New folder here..."), NewFolder));
+                cm.Items.Add(new ToolStripSeparator());
+                cm.Items.Add(Item(L.T("مشاركة كـ zip...", "Share as zip..."), () => ShareFolderZip(path)));
+                cm.Items.Add(Item(L.T("إظهار في مستكشف الملفات", "Show in File Explorer"), RevealSelected));
+                if (!isRoot)
+                {
+                    cm.Items.Add(Item(L.T("إعادة تسمية...", "Rename..."), RenameSelected));
+                    cm.Items.Add(Item(L.T("نقل إلى...", "Move to..."), MoveSelected));
+                    cm.Items.Add(new ToolStripSeparator());
+                    cm.Items.Add(Item(L.T("حذف", "Delete"), DeleteSelected));
+                }
+            }
+            else { e.Cancel = true; }
+        };
+        return cm;
     }
 
     // ---------- القبو والشجرة ----------
@@ -291,8 +389,11 @@ public class MainForm : Form
         dirty = false;
         ResetHistory();
         LoadTree();
-        var first = vault.AllNotes().OrderBy(p => p).FirstOrDefault();
-        if (first != null) OpenNote(first);
+        // فتح آخر ملاحظة فتحها المستخدم إن كانت ما تزال موجودة، وإلا أول ملاحظة
+        var target = settings.RecentNotes.FirstOrDefault(p =>
+                         File.Exists(p) && p.StartsWith(vault.Root, StringComparison.OrdinalIgnoreCase))
+                     ?? vault.AllNotes().OrderBy(p => p).FirstOrDefault();
+        if (target != null) OpenNote(target);
     }
 
     void ChooseVault()
@@ -326,25 +427,73 @@ public class MainForm : Form
 
     void AddChildren(TreeNode parent, string dir)
     {
-        IEnumerable<string> dirs, files;
+        List<string> dirs, files;
         try
         {
-            dirs = Directory.GetDirectories(dir).OrderBy(x => Path.GetFileName(x), StringComparer.CurrentCultureIgnoreCase);
-            files = Directory.GetFiles(dir, "*.md").OrderBy(x => Path.GetFileName(x), StringComparer.CurrentCultureIgnoreCase);
+            dirs = Directory.GetDirectories(dir)
+                .Where(d => { var n = Path.GetFileName(d);
+                              return !n.StartsWith('.') && !string.Equals(n, Vault.TrashFolderName, StringComparison.OrdinalIgnoreCase); })
+                .ToList();
+            files = Directory.GetFiles(dir, "*.md").ToList();
         }
         catch { return; }
 
-        foreach (var d in dirs)
+        Sort(dirs);
+        Sort(files);
+
+        // ترتيب العرض: المجلدات أولاً، أو الملاحظات أولاً، أو مختلط (الكل معاً بنفس المعيار)
+        IEnumerable<(string Path, bool IsDir)> ordered = settings.Grouping switch
         {
-            var name = Path.GetFileName(d);
-            if (name.StartsWith('.') || string.Equals(name, Vault.TrashFolderName, StringComparison.OrdinalIgnoreCase))
-                continue;
-            var n = new TreeNode(name) { Tag = d };
-            AddChildren(n, d);
-            parent.Nodes.Add(n);
+            "notes" => files.Select(f => (f, false)).Concat(dirs.Select(d => (d, true))),
+            "mixed" => SortMixed(dirs, files),
+            _ => dirs.Select(d => (d, true)).Concat(files.Select(f => (f, false))),
+        };
+
+        foreach (var (path, isDir) in ordered)
+        {
+            if (isDir)
+            {
+                var n = new TreeNode(Path.GetFileName(path)) { Tag = path };
+                AddChildren(n, path);
+                parent.Nodes.Add(n);
+            }
+            else
+                parent.Nodes.Add(new TreeNode(Path.GetFileNameWithoutExtension(path)) { Tag = path });
         }
-        foreach (var f in files)
-            parent.Nodes.Add(new TreeNode(Path.GetFileNameWithoutExtension(f)) { Tag = f });
+    }
+
+    static DateTime FileTime(string path, bool created)
+    {
+        try
+        {
+            return created ? File.GetCreationTimeUtc(path) : File.GetLastWriteTimeUtc(path);
+        }
+        catch { return DateTime.MinValue; }
+    }
+
+    /// <summary>مقارنة عنصرين حسب معيار الترتيب المختار (الاسم أو التاريخ).</summary>
+    int CompareItems(string a, string b) => settings.SortKey switch
+    {
+        "modified" => FileTime(a, false).CompareTo(FileTime(b, false)),
+        "created" => FileTime(a, true).CompareTo(FileTime(b, true)),
+        _ => string.Compare(Path.GetFileNameWithoutExtension(a),
+                Path.GetFileNameWithoutExtension(b), StringComparison.CurrentCultureIgnoreCase),
+    };
+
+    void Sort(List<string> paths)
+    {
+        paths.Sort(CompareItems);
+        if (settings.SortDescending) paths.Reverse();
+    }
+
+    IEnumerable<(string Path, bool IsDir)> SortMixed(List<string> dirs, List<string> files)
+    {
+        var all = dirs.Select(d => (Path: d, IsDir: true))
+            .Concat(files.Select(f => (Path: f, IsDir: false)))
+            .ToList();
+        all.Sort((x, y) => CompareItems(x.Path, y.Path));
+        if (settings.SortDescending) all.Reverse();
+        return all;
     }
 
     TreeNode? FindNode(TreeNodeCollection nodes, string path)
@@ -580,6 +729,115 @@ public class MainForm : Form
         LoadTree();
         tree.Focus();
         Announce(L.T($"نُقل {kind} {name} إلى المحذوفات", $"Moved {kind} {name} to trash"));
+    }
+
+    void MoveSelected()
+    {
+        string? path = tree.SelectedNode?.Tag as string ?? currentNote;
+        if (path == null || string.Equals(path, vault.Root, StringComparison.OrdinalIgnoreCase))
+        {
+            Announce(L.T("لا يوجد عنصر محدد للنقل", "Nothing selected to move"));
+            return;
+        }
+        bool isFolder = Directory.Exists(path);
+        var itemName = isFolder ? Path.GetFileName(path) : Path.GetFileNameWithoutExtension(path);
+
+        using var picker = new ListPickForm(
+            L.T($"نقل \"{itemName}\" إلى مجلد", $"Move \"{itemName}\" to folder"),
+            L.T("اختر مجلد الوجهة", "Choose the destination folder"));
+        foreach (var folder in vault.AllFolders())
+        {
+            var display = string.Equals(folder, vault.Root, StringComparison.OrdinalIgnoreCase)
+                ? L.T("(جذر القبو)", "(vault root)")
+                : Path.GetRelativePath(vault.Root, folder);
+            picker.AddItem(display, folder);
+        }
+        if (picker.ShowDialog(this) != DialogResult.OK || picker.Result is not string dest) return;
+
+        if (!vault.CanMoveInto(path, dest, out var reason))
+        {
+            Announce(reason == "same"
+                ? L.T("العنصر موجود في هذا المجلد أصلاً", "The item is already in that folder")
+                : L.T("لا يمكن نقل مجلد إلى داخل نفسه", "Cannot move a folder into itself"));
+            return;
+        }
+
+        string newPath;
+        try { newPath = vault.MoveTo(path, dest); }
+        catch (Exception ex) { Msg(L.T("تعذّر النقل: ", "Could not move: ") + ex.Message); return; }
+
+        // تحديث مسار الملاحظة المفتوحة إن كانت هي المنقولة أو داخل مجلد منقول
+        if (currentNote != null)
+        {
+            if (!isFolder && string.Equals(currentNote, path, StringComparison.OrdinalIgnoreCase))
+                currentNote = newPath;
+            else if (isFolder && currentNote.StartsWith(path + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                currentNote = newPath + currentNote[path.Length..];
+        }
+
+        LoadTree();
+        if (File.Exists(newPath)) SelectNodeFor(newPath);
+        tree.Focus();
+        var destName = string.Equals(dest, vault.Root, StringComparison.OrdinalIgnoreCase)
+            ? L.T("جذر القبو", "the vault root") : Path.GetRelativePath(vault.Root, dest);
+        Announce(L.T($"نُقل {itemName} إلى {destName}", $"Moved {itemName} to {destName}"));
+    }
+
+    void RevealSelected()
+    {
+        string? path = tree.SelectedNode?.Tag as string ?? currentNote;
+        if (path == null || (!File.Exists(path) && !Directory.Exists(path)))
+        {
+            Announce(L.T("لا يوجد عنصر محدد", "Nothing selected"));
+            return;
+        }
+        try { Process.Start("explorer.exe", $"/select,\"{path}\""); }
+        catch (Exception ex) { Msg(L.T("تعذّر الفتح: ", "Could not open: ") + ex.Message); }
+    }
+
+    void OpenTrash()
+    {
+        SaveCurrent();
+        using var dlg = new TrashForm(vault);
+        dlg.ShowDialog(this);
+        if (dlg.Changed)
+        {
+            LoadTree();
+            Announce(L.T("حُدّثت شجرة الملاحظات", "Notes tree refreshed"));
+        }
+    }
+
+    /// <summary>يضغط مجلداً في ملف zip لمشاركته، إلى مكان يختاره المستخدم عبر نافذة حفظ قياسية.</summary>
+    void ShareFolderZip(string folder)
+    {
+        if (!Directory.Exists(folder)) { Announce(L.T("لا يوجد مجلد محدد", "No folder selected")); return; }
+        SaveCurrent();
+        using var dlg = new SaveFileDialog
+        {
+            Title = L.T("مشاركة المجلد كـ zip", "Share folder as zip"),
+            Filter = "Zip (*.zip)|*.zip",
+            FileName = Vault.Sanitize(Path.GetFileName(folder)) + ".zip",
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop)
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        // منع كتابة ملف الـ zip داخل المجلد الذي نضغطه (يفشل الضغط)
+        var destFull = Path.GetFullPath(dlg.FileName);
+        var folderFull = Path.GetFullPath(folder);
+        if (destFull.StartsWith(folderFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+        {
+            Msg(L.T("اختر مكاناً للملف المضغوط خارج المجلد نفسه.", "Choose a location for the zip outside the folder itself."));
+            return;
+        }
+        try
+        {
+            if (File.Exists(dlg.FileName)) File.Delete(dlg.FileName);
+            System.IO.Compression.ZipFile.CreateFromDirectory(folder, dlg.FileName,
+                System.IO.Compression.CompressionLevel.Optimal, includeBaseDirectory: true);
+            Announce(L.T($"أُنشئ الملف المضغوط: {Path.GetFileName(dlg.FileName)}",
+                         $"Created zip: {Path.GetFileName(dlg.FileName)}"));
+        }
+        catch (Exception ex) { Msg(L.T("تعذّرت المشاركة: ", "Could not share: ") + ex.Message); }
     }
 
     // ---------- الروابط ----------
@@ -1466,12 +1724,20 @@ public class MainForm : Form
 Ctrl+N — ملاحظة جديدة
 Ctrl+Shift+N — مجلد جديد
 F2 — إعادة تسمية العنصر المحدد
+Ctrl+Shift+M — نقل الملاحظة أو المجلد إلى مجلد آخر
 Delete (في الشجرة) — نقل إلى المحذوفات
 Ctrl+S — حفظ (الحفظ يتم تلقائياً أيضاً)
 F5 — تحديث شجرة الملاحظات
 Ctrl+O — فتح قبو آخر
 Ctrl+Shift+B — نسخة احتياطية الآن
 Ctrl+, — الإعدادات (اللغة، تنسيق التاريخ، مجلد النسخ الاحتياطي)
+مفتاح قائمة السياق (أو Shift+F10) على أي عنصر في الشجرة —
+قائمة إجراءات تتكيّف: فتح كـ HTML، تسمية، نقل، مشاركة مجلد كـ zip، حذف
+قائمة ملف > المحذوفات... — استرجاع المحذوف أو حذفه نهائياً أو إفراغ السلة
+
+الترتيب (قائمة عرض > ترتيب الملاحظات):
+اختر المعيار (الاسم/تاريخ التعديل/تاريخ الإنشاء)،
+والاتجاه (تصاعدي/تنازلي)، والتجميع (المجلدات أولاً/الملاحظات أولاً/مختلط)
 
 التنقل:
 Ctrl+P — فتح ملاحظة بسرعة بالاسم
@@ -1537,12 +1803,20 @@ Files:
 Ctrl+N — new note
 Ctrl+Shift+N — new folder
 F2 — rename selected item
+Ctrl+Shift+M — move the note or folder to another folder
 Delete (in the tree) — move to trash
 Ctrl+S — save (autosave also runs)
 F5 — refresh the notes tree
 Ctrl+O — open another vault
 Ctrl+Shift+B — back up now
 Ctrl+, — settings (language, date format, backup folder)
+Applications key (or Shift+F10) on any tree item —
+an actions menu that adapts: open as HTML, rename, move, share folder as zip, delete
+File menu > Trash... — restore, permanently delete, or empty the trash
+
+Sorting (View menu > Sort notes):
+choose the key (name/modified/created),
+direction (ascending/descending), and grouping (folders first/notes first/mixed)
 
 Navigation:
 Ctrl+P — quick open a note by name
