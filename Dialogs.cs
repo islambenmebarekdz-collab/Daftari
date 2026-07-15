@@ -7,7 +7,7 @@ public static class InputBox
 {
     public static string? Show(IWin32Window owner, string title, string prompt, string initial = "", bool allowEmpty = false)
     {
-        using var f = new Form
+        using var f = new AppForm
         {
             Text = title,
             RightToLeft = L.Rtl,
@@ -36,7 +36,7 @@ public static class InputBox
 /// <summary>
 /// قائمة اختيار عامة: عنصر واحد لكل نتيجة، Enter للاختيار، Escape للإغلاق.
 /// </summary>
-public class ListPickForm : Form
+public class ListPickForm : AppForm
 {
     readonly ListBox list = new();
     readonly List<object?> payloads = new();
@@ -91,7 +91,7 @@ public class ListPickForm : Form
 /// منتقي ملاحظات مع حقل ترشيح: للفتح السريع وإدراج الروابط.
 /// السهم لأسفل ينقل من حقل الترشيح إلى القائمة، وEnter يختار.
 /// </summary>
-public class NotePickerForm : Form
+public class NotePickerForm : AppForm
 {
     readonly TextBox filter = new();
     readonly ListBox list = new();
@@ -193,7 +193,7 @@ public class NotePickerForm : Form
 }
 
 /// <summary>البحث في كل ملاحظات القبو: حقل استعلام وقائمة نتائج.</summary>
-public class VaultSearchForm : Form
+public class VaultSearchForm : AppForm
 {
     readonly TextBox query = new();
     readonly ListBox results = new();
@@ -294,7 +294,7 @@ public class VaultSearchForm : Form
 }
 
 /// <summary>الوسوم على مرحلتين: قائمة الوسوم ثم قائمة الملاحظات الحاوية للوسم المختار.</summary>
-public class TagsForm : Form
+public class TagsForm : AppForm
 {
     readonly ListBox list = new();
     readonly Label header = new();
@@ -380,7 +380,7 @@ public class TagsForm : Form
 }
 
 /// <summary>نافذة الاختصارات: نص للقراءة فقط يتنقل فيه قارئ الشاشة بالأسهر.</summary>
-public class HelpForm : Form
+public class HelpForm : AppForm
 {
     public HelpForm(string text)
     {
@@ -413,7 +413,7 @@ public class HelpForm : Form
 }
 
 /// <summary>يسأل عن أبعاد الجدول الجديد قبل فتح محرر الشبكة.</summary>
-public class TableSizeForm : Form
+public class TableSizeForm : AppForm
 {
     readonly NumericUpDown cols = new() { Minimum = 1, Maximum = 12, Value = 3 };
     readonly NumericUpDown rows = new() { Minimum = 1, Maximum = 100, Value = 3 };
@@ -455,7 +455,7 @@ public class TableSizeForm : Form
 /// محرر جداول شبكي: يحرر المستخدم الخلايا في شبكة حقيقية يقرؤها NVDA
 /// صفاً وعموداً كما في Excel، والتطبيق يتولى صياغة Markdown بنفسه.
 /// </summary>
-public class TableEditorForm : Form
+public class TableEditorForm : AppForm
 {
     readonly DataGridView grid = new();
     int columnCounter;
@@ -613,7 +613,7 @@ public class TableEditorForm : Form
 }
 
 /// <summary>إعدادات التطبيق: اللغة، تنسيق التاريخ، مجلد النسخ الاحتياطي.</summary>
-public class SettingsForm : Form
+public class SettingsForm : AppForm
 {
     static readonly string[] DateFormatKeys = { "arabic", "algerian", "english", "numeric" };
 
@@ -721,7 +721,7 @@ public class SettingsForm : Form
 /// <summary>
 /// مدير المحذوفات: قائمة يقرؤها NVDA بالعناصر المحذوفة، مع استرجاع أو حذف نهائي أو إفراغ.
 /// </summary>
-public class TrashForm : Form
+public class TrashForm : AppForm
 {
     readonly Vault vault;
     readonly ListBox list = new();
@@ -880,7 +880,7 @@ public class TrashForm : Form
 /// نافذة الروابط والإشارات: قسم للروابط الواردة الصريحة، وقسم للإشارات غير المرتبطة
 /// مع أمر تحويلها إلى روابط [[...]] بضغطة واحدة (F2 أو الزر).
 /// </summary>
-public class BacklinksForm : Form
+public class BacklinksForm : AppForm
 {
     readonly Vault vault;
     readonly string noteName;
