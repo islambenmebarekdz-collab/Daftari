@@ -222,6 +222,64 @@ public class Vault
         }
     }
 
+    static readonly Regex AnyWikiLink = new(@"\[\[[^\]]*\]\]", RegexOptions.Compiled);
+
+    static Regex StandaloneName(string name) =>
+        new(@"(?<![\p{L}\p{N}_])" + Regex.Escape(name) + @"(?![\p{L}\p{N}_])", RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// إشارات غير مرتبطة: ملاحظات تذكر اسم الملاحظة الحالية كنص عادٍ (خارج أي رابط [[...]]).
+    /// تُستخدم لاقتراح تحويلها إلى روابط صريحة.
+    /// </summary>
+    public IEnumerable<SearchHit> UnlinkedMentions(string notePath)
+    {
+        var name = DisplayName(notePath);
+        if (name.Length == 0) yield break;
+        var rx = StandaloneName(name);
+        int count = 0;
+        foreach (var (p, note) in Indexed())
+        {
+            if (string.Equals(p, notePath, StringComparison.OrdinalIgnoreCase)) continue;
+            for (int i = 0; i < note.Lines.Length; i++)
+            {
+                // نزيل نطاقات الروابط [[...]] أولاً فيبقى فقط النص العادي للفحص
+                var stripped = AnyWikiLink.Replace(note.Lines[i], " ");
+                if (rx.IsMatch(stripped))
+                {
+                    yield return new SearchHit(p, i, note.Lines[i].Trim());
+                    if (++count >= 300) yield break;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// يحوّل أول ذكرٍ عادٍ للاسم في سطر معيّن إلى رابط [[الاسم]]، متجاوزاً ما هو داخل روابط قائمة.
+    /// يعيد true عند نجاح التحويل والحفظ.
+    /// </summary>
+    public bool ConvertMentionToLink(string filePath, int lineNumber, string name)
+    {
+        string[] lines;
+        try { lines = File.ReadAllText(filePath).Replace("\r\n", "\n").Split('\n'); }
+        catch { return false; }
+        if (lineNumber < 0 || lineNumber >= lines.Length) return false;
+
+        var line = lines[lineNumber];
+        var linkSpans = AnyWikiLink.Matches(line).Select(m => (m.Index, End: m.Index + m.Length)).ToList();
+        foreach (Match m in StandaloneName(name).Matches(line))
+        {
+            if (linkSpans.Any(s => m.Index >= s.Index && m.Index < s.End)) continue; // داخل رابط قائم
+            lines[lineNumber] = line[..m.Index] + "[[" + name + "]]" + line[(m.Index + name.Length)..];
+            try
+            {
+                File.WriteAllText(filePath, string.Join("\r\n", lines), new UTF8Encoding(false));
+                return true;
+            }
+            catch { return false; }
+        }
+        return false;
+    }
+
     /// <summary>كل الوسوم (#وسم) في القبو مع الملاحظات الحاوية لكل وسم.</summary>
     public SortedDictionary<string, List<string>> AllTags()
     {

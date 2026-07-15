@@ -923,18 +923,16 @@ public class MainForm : Form
     {
         if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
         SaveCurrent();
-        var hits = vault.Backlinks(currentNote).ToList();
-        if (hits.Count == 0) { Announce(L.T("لا توجد روابط واردة لهذه الملاحظة", "No backlinks to this note")); return; }
-        using var dlg = new ListPickForm(
-            L.T($"الروابط الواردة إلى {vault.DisplayName(currentNote)} ({hits.Count})",
-                $"Backlinks to {vault.DisplayName(currentNote)} ({hits.Count})"),
-            L.T("قائمة الروابط الواردة", "Backlink list"));
-        foreach (var h in hits)
+        var linked = vault.Backlinks(currentNote).ToList();
+        var unlinked = vault.UnlinkedMentions(currentNote).ToList();
+        if (linked.Count == 0 && unlinked.Count == 0)
         {
-            var snippet = h.LineText.Length > 80 ? h.LineText[..80] + "…" : h.LineText;
-            dlg.AddItem($"{vault.RelativeName(h.FilePath)} — {snippet}", h);
+            Announce(L.T("لا روابط واردة ولا إشارات لهذه الملاحظة", "No backlinks or mentions for this note"));
+            return;
         }
-        if (dlg.ShowDialog(this) == DialogResult.OK && dlg.Result is SearchHit hit)
+        using var dlg = new BacklinksForm(vault, currentNote, linked, unlinked);
+        var result = dlg.ShowDialog(this);
+        if (result == DialogResult.OK && dlg.Selected is SearchHit hit)
         {
             OpenNote(hit.FilePath, hit.LineNumber);
             FocusEditorFresh();

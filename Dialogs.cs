@@ -149,6 +149,8 @@ public class NotePickerForm : Form
         };
 
         Refill();
+        // التركيز على حقل الترشيح فور الفتح كي يكتب المستخدم مباشرة بلا Tab
+        Shown += (_, _) => filter.Focus();
     }
 
     void Refill()
@@ -248,6 +250,8 @@ public class VaultSearchForm : Form
         {
             if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); }
         };
+        // التركيز على حقل البحث فور الفتح كي يكتب المستخدم مباشرة بلا Tab
+        Shown += (_, _) => query.Focus();
     }
 
     void DoSearch()
@@ -865,6 +869,155 @@ public class TrashForm : Form
         try
         {
             list.AccessibilityObject.RaiseAutomationNotification(
+                AutomationNotificationKind.ActionCompleted,
+                AutomationNotificationProcessing.MostRecent, message);
+        }
+        catch { }
+    }
+}
+
+/// <summary>
+/// نافذة الروابط والإشارات: قسم للروابط الواردة الصريحة، وقسم للإشارات غير المرتبطة
+/// مع أمر تحويلها إلى روابط [[...]] بضغطة واحدة (F2 أو الزر).
+/// </summary>
+public class BacklinksForm : Form
+{
+    readonly Vault vault;
+    readonly string noteName;
+    readonly List<SearchHit> linked;
+    readonly List<SearchHit> unlinked;
+    readonly ListBox linkedList = new();
+    readonly ListBox unlinkedList = new();
+    readonly GroupBox linkedGroup = new();
+    readonly GroupBox unlinkedGroup = new();
+
+    public SearchHit? Selected { get; private set; }
+    public bool VaultChanged { get; private set; }
+
+    public BacklinksForm(Vault vault, string notePath, IEnumerable<SearchHit> linkedHits, IEnumerable<SearchHit> unlinkedHits)
+    {
+        this.vault = vault;
+        noteName = vault.DisplayName(notePath);
+        linked = linkedHits.ToList();
+        unlinked = unlinkedHits.ToList();
+
+        Text = L.T($"الروابط والإشارات — {noteName}", $"Links and mentions — {noteName}");
+        RightToLeft = L.Rtl;
+        RightToLeftLayout = L.RtlLayout;
+        StartPosition = FormStartPosition.CenterParent;
+        ShowInTaskbar = false;
+        MinimizeBox = false;
+        ClientSize = new Size(680, 520);
+        KeyPreview = true;
+
+        linkedGroup.Dock = DockStyle.Top;
+        linkedGroup.Height = 220;
+        linkedGroup.RightToLeft = L.Rtl;
+        linkedList.Dock = DockStyle.Fill;
+        linkedList.AccessibleName = L.T("الروابط الواردة", "Backlinks");
+        linkedList.IntegralHeight = false;
+        linkedGroup.Controls.Add(linkedList);
+
+        unlinkedGroup.Dock = DockStyle.Fill;
+        unlinkedGroup.RightToLeft = L.Rtl;
+        unlinkedList.Dock = DockStyle.Fill;
+        unlinkedList.AccessibleName = L.T("إشارات غير مرتبطة", "Unlinked mentions");
+        unlinkedList.IntegralHeight = false;
+        unlinkedGroup.Controls.Add(unlinkedList);
+
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(8, 6, 8, 6) };
+        var openBtn = new Button { Text = L.T("فتح", "Open"), AutoSize = true };
+        openBtn.Click += (_, _) => OpenFocused();
+        var convBtn = new Button { Text = L.T("تحويل الإشارة إلى رابط", "Convert mention to link"), AutoSize = true };
+        convBtn.Click += (_, _) => ConvertSelected();
+        var close = new Button { Text = L.T("إغلاق", "Close"), AutoSize = true, DialogResult = DialogResult.Cancel };
+        buttons.Controls.AddRange(new Control[] { openBtn, convBtn, close });
+
+        Controls.Add(unlinkedGroup);
+        Controls.Add(linkedGroup);
+        Controls.Add(buttons);
+        CancelButton = close;
+
+        linkedList.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { Open(linked, linkedList); e.SuppressKeyPress = true; } };
+        linkedList.DoubleClick += (_, _) => Open(linked, linkedList);
+        unlinkedList.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter) { Open(unlinked, unlinkedList); e.SuppressKeyPress = true; }
+            else if (e.KeyCode == Keys.F2) { ConvertSelected(); e.SuppressKeyPress = true; }
+        };
+        unlinkedList.DoubleClick += (_, _) => Open(unlinked, unlinkedList);
+        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); } };
+
+        FillLists();
+        Shown += (_, _) => { if (linked.Count > 0) linkedList.Focus(); else unlinkedList.Focus(); };
+    }
+
+    void FillLists()
+    {
+        linkedGroup.Text = L.T($"الروابط الواردة ({linked.Count})", $"Backlinks ({linked.Count})");
+        unlinkedGroup.Text = L.T($"إشارات غير مرتبطة — F2 لتحويلها إلى رابط ({unlinked.Count})",
+                                 $"Unlinked mentions — F2 to convert to a link ({unlinked.Count})");
+        linkedList.BeginUpdate();
+        linkedList.Items.Clear();
+        foreach (var h in linked) linkedList.Items.Add(Display(h));
+        if (linkedList.Items.Count > 0) linkedList.SelectedIndex = 0;
+        linkedList.EndUpdate();
+        unlinkedList.BeginUpdate();
+        unlinkedList.Items.Clear();
+        foreach (var h in unlinked) unlinkedList.Items.Add(Display(h));
+        if (unlinkedList.Items.Count > 0) unlinkedList.SelectedIndex = 0;
+        unlinkedList.EndUpdate();
+    }
+
+    string Display(SearchHit h)
+    {
+        var snippet = h.LineText.Length > 70 ? h.LineText[..70] + "…" : h.LineText;
+        return L.T($"{vault.RelativeName(h.FilePath)} — السطر {h.LineNumber + 1}: {snippet}",
+                   $"{vault.RelativeName(h.FilePath)} — line {h.LineNumber + 1}: {snippet}");
+    }
+
+    void OpenFocused()
+    {
+        if (unlinkedList.Focused) Open(unlinked, unlinkedList);
+        else Open(linked, linkedList);
+    }
+
+    void Open(List<SearchHit> src, ListBox lb)
+    {
+        if (lb.SelectedIndex < 0 || lb.SelectedIndex >= src.Count) return;
+        Selected = src[lb.SelectedIndex];
+        DialogResult = DialogResult.OK;
+        Close();
+    }
+
+    void ConvertSelected()
+    {
+        int idx = unlinkedList.SelectedIndex;
+        if (idx < 0 || idx >= unlinked.Count)
+        {
+            Say(L.T("اختر إشارة غير مرتبطة أولاً", "Select an unlinked mention first"));
+            return;
+        }
+        var h = unlinked[idx];
+        if (vault.ConvertMentionToLink(h.FilePath, h.LineNumber, noteName))
+        {
+            VaultChanged = true;
+            unlinked.RemoveAt(idx);
+            linked.Add(h);
+            FillLists();
+            if (unlinkedList.Items.Count > 0)
+                unlinkedList.SelectedIndex = Math.Min(idx, unlinkedList.Items.Count - 1);
+            unlinkedList.Focus();
+            Say(L.T("حُوّلت الإشارة إلى رابط", "Mention converted to a link"));
+        }
+        else Say(L.T("تعذّر التحويل", "Could not convert"));
+    }
+
+    void Say(string message)
+    {
+        try
+        {
+            (ActiveControl ?? (Control)this).AccessibilityObject.RaiseAutomationNotification(
                 AutomationNotificationKind.ActionCompleted,
                 AutomationNotificationProcessing.MostRecent, message);
         }
