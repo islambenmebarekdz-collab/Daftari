@@ -154,12 +154,48 @@ public class Vault
         return dest;
     }
 
+    /// <summary>
+    /// بحث مرجّح: تطابق عنوان الملاحظة (اسم الملف) يتصدّر، ثم الملاحظات ذات أكثر عدد تطابقات،
+    /// مع دعم البحث بالوسوم (#tag) في نفس الصندوق. النتائج مرتّبة، الأعلى ترجيحاً أولاً.
+    /// </summary>
     public IEnumerable<SearchHit> Search(string query)
     {
+        query = query.Trim();
+        if (query.Length == 0) yield break;
+        var tagQuery = query.TrimStart('#');
+
+        var scored = new List<(int Score, string Path, List<SearchHit> Hits)>();
         foreach (var (p, note) in Indexed())
+        {
+            var hits = new List<SearchHit>();
             for (int i = 0; i < note.Lines.Length; i++)
                 if (note.Lines[i].Contains(query, StringComparison.OrdinalIgnoreCase))
-                    yield return new SearchHit(p, i, note.Lines[i].Trim());
+                    hits.Add(new SearchHit(p, i, note.Lines[i].Trim()));
+
+            bool titleMatch = DisplayName(p).Contains(query, StringComparison.OrdinalIgnoreCase);
+            bool tagMatch = tagQuery.Length > 0 &&
+                            note.Tags.Any(t => t.Contains(tagQuery, StringComparison.OrdinalIgnoreCase));
+
+            int bodyHits = hits.Count;
+            if (bodyHits == 0 && !titleMatch && !tagMatch) continue;
+
+            // الترجيح: العنوان يتصدّر (+1000)، ثم الوسم (+200)، ثم عدد التطابقات
+            int score = bodyHits + (titleMatch ? 1000 : 0) + (tagMatch ? 200 : 0);
+
+            // نتيجة نائبة تشير إلى الملاحظة عند تطابق العنوان أو الوسم فقط بلا تطابق في الأسطر
+            if (hits.Count == 0)
+            {
+                var firstLine = note.Lines.FirstOrDefault(l => l.Trim().Length > 0)?.Trim() ?? DisplayName(p);
+                hits.Add(new SearchHit(p, 0, firstLine));
+            }
+            scored.Add((score, p, hits));
+        }
+
+        foreach (var s in scored
+                     .OrderByDescending(x => x.Score)
+                     .ThenBy(x => DisplayName(x.Path), StringComparer.CurrentCultureIgnoreCase))
+            foreach (var h in s.Hits)
+                yield return h;
     }
 
     /// <summary>كل الملاحظات التي تحتوي رابطاً [[...]] يشير إلى الملاحظة المعطاة.</summary>

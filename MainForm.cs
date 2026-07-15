@@ -146,12 +146,15 @@ public class MainForm : Form
                 editor.SelectAll();
                 e.SuppressKeyPress = true;
             }
-            // حقل النص القياسي يمرّر العرض فقط عند Ctrl+سهم دون تحريك المؤشر،
-            // فننفذ التنقل بين الفقرات بأنفسنا ليتبعه NVDA.
+            // Ctrl+سهم حسب وضع الالتفاف: في وضع التفاف الأسطر (القراءة) يتنقل بين الفقرات،
+            // وفي وضع تعطيل الالتفاف (الهيكل) يتنقل بين عناوين الملاحظة فقط.
+            // (حقل النص القياسي يمرّر العرض فقط عند Ctrl+سهم دون تحريك المؤشر، فننفذه بأنفسنا ليتبعه NVDA)
             else if (e.Control && !e.Alt && !e.Shift &&
                      (e.KeyCode == Keys.Up || e.KeyCode == Keys.Down))
             {
-                MoveByParagraph(down: e.KeyCode == Keys.Down);
+                bool down = e.KeyCode == Keys.Down;
+                if (settings.WordWrap) MoveByParagraph(down);
+                else JumpHeading(down);
                 e.SuppressKeyPress = true;
             }
             else if (e.Control && e.Shift && !e.Alt &&
@@ -1748,8 +1751,9 @@ Ctrl+E — الانتقال إلى المحرر
 Ctrl+Shift+E — الانتقال إلى شجرة الملاحظات
 Ctrl+Shift+S — إظهار أو إخفاء شجرة الملاحظات (يمنح المحرر كامل النافذة)
 F6 — التبديل بين الشجرة والمحرر
-Ctrl+سهم لأعلى أو لأسفل — التنقل بين الفقرات
-Alt+سهم لأعلى أو لأسفل — القفز بين العناوين
+Ctrl+سهم لأعلى أو لأسفل — التنقل بين الفقرات (مع التفاف الأسطر)
+أو بين العناوين (مع تعطيل التفاف الأسطر بـ Ctrl+Shift+W)
+Alt+سهم لأعلى أو لأسفل — القفز بين العناوين دائماً
 Ctrl+J — قائمة عناوين الملاحظة الحالية
 Ctrl+D — ملاحظة اليوم (تُنشأ في مجلد اليوميات)
 
@@ -1827,8 +1831,9 @@ Ctrl+E — go to the editor
 Ctrl+Shift+E — go to the notes tree
 Ctrl+Shift+S — show or hide the notes tree (gives the editor the full window)
 F6 — switch between tree and editor
-Ctrl+Up or Down arrow — move between paragraphs
-Alt+Up or Down arrow — jump between headings
+Ctrl+Up or Down arrow — move between paragraphs (with word wrap on)
+or between headings (with word wrap off via Ctrl+Shift+W)
+Alt+Up or Down arrow — always jump between headings
 Ctrl+J — list of headings in the current note
 Ctrl+D — today's note (created in the journal folder)
 
