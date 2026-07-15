@@ -82,6 +82,25 @@ public class MainForm : Form
         FormClosing += (_, _) => { SaveCurrent(); settings.Save(); };
     }
 
+    /// <summary>
+    /// يمنع تفعيل شريط القوائم أو قائمة النظام عبر لوحة المفاتيح عندما يكون Shift مضغوطاً.
+    /// ويندوز يفعّلهما برسالة WM_SYSCOMMAND/SC_KEYMENU عند لمس Alt/مفتاح القوائم، وهذا كان
+    /// يتضارب مع اختصار تبديل لغة الإدخال (Alt+Shift) فتظهر قائمة النظام أو تُعطّل اللغة.
+    /// نبتلع الرسالة في هذه الحالة فقط، فيبقى وصول القوائم بـ Alt+حرف سليماً.
+    /// </summary>
+    protected override void WndProc(ref Message m)
+    {
+        const int WM_SYSCOMMAND = 0x0112;
+        const int SC_KEYMENU = 0xF100;
+        if (m.Msg == WM_SYSCOMMAND
+            && ((int)(m.WParam.ToInt64() & 0xFFF0)) == SC_KEYMENU
+            && (ModifierKeys & Keys.Shift) == Keys.Shift)
+        {
+            return;
+        }
+        base.WndProc(ref m);
+    }
+
     // ---------- بناء الواجهة ----------
 
     void BuildLayout()
