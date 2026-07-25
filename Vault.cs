@@ -83,13 +83,27 @@ public class Vault
             cache.Remove(stale);
     }
 
-    public string DisplayName(string path) => Path.GetFileNameWithoutExtension(path);
+    /// <summary>اسم العرض: يزيل الامتداد، ويزيل امتدادَي الملاحظة المقفلة (.md.enc) معاً.</summary>
+    public string DisplayName(string path)
+    {
+        var name = Path.GetFileName(path);
+        if (name.EndsWith(NoteCrypto.Extension, StringComparison.OrdinalIgnoreCase))
+            return name[..^NoteCrypto.Extension.Length];
+        return Path.GetFileNameWithoutExtension(name);
+    }
 
     public string RelativeName(string path)
     {
         var rel = Path.GetRelativePath(Root, path);
+        if (rel.EndsWith(NoteCrypto.Extension, StringComparison.OrdinalIgnoreCase))
+            return rel[..^NoteCrypto.Extension.Length];
         return rel.EndsWith(".md", StringComparison.OrdinalIgnoreCase) ? rel[..^3] : rel;
     }
+
+    /// <summary>الملاحظات المقفلة (ملفات مشفّرة) — تظهر في الشجرة لكنها خارج الفهرس والبحث.</summary>
+    public IEnumerable<string> EncryptedNotes() =>
+        Directory.EnumerateFiles(Root, "*" + NoteCrypto.Extension, SearchOption.AllDirectories)
+            .Where(p => !IsExcluded(p));
 
     /// <summary>حل رابط ويكي إلى مسار ملف: بالاسم أولاً ثم بالمسار النسبي.</summary>
     public string? ResolveLink(string target)

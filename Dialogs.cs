@@ -5,7 +5,8 @@ namespace Daftari;
 /// <summary>حوار إدخال نص بسيط، مُسمّى بالكامل لقارئ الشاشة.</summary>
 public static class InputBox
 {
-    public static string? Show(IWin32Window owner, string title, string prompt, string initial = "", bool allowEmpty = false)
+    public static string? Show(IWin32Window owner, string title, string prompt, string initial = "",
+                               bool allowEmpty = false, bool password = false)
     {
         using var f = new AppForm
         {
@@ -21,6 +22,7 @@ public static class InputBox
         };
         var lbl = new Label { Text = prompt, Left = 12, Top = 12, Width = 416 };
         var tb = new TextBox { Left = 12, Top = 40, Width = 416, Text = initial, AccessibleName = prompt };
+        if (password) { tb.UseSystemPasswordChar = true; tb.RightToLeft = RightToLeft.No; }
         var ok = new Button { Text = L.T("موافق", "OK"), DialogResult = DialogResult.OK, Left = 12, Top = 84, Width = 110 };
         var cancel = new Button { Text = L.T("إلغاء", "Cancel"), DialogResult = DialogResult.Cancel, Left = 130, Top = 84, Width = 110 };
         f.Controls.AddRange(new Control[] { lbl, tb, ok, cancel });
@@ -763,6 +765,108 @@ public class SettingsForm : AppForm
         settings.SyncTitleToFileName = syncTitle.Checked;
         settings.LinkAutocomplete = linkAuto.Checked;
         settings.Save();
+    }
+}
+
+/// <summary>
+/// ضبط كلمة مرور قفل ملاحظة: حقلان مقنّعان للتأكيد، مؤشر قوة يُعلن لقارئ الشاشة،
+/// وتحذير صريح بأن نسيان كلمة المرور يعني ضياع الملاحظة بلا استرجاع.
+/// </summary>
+public class PasswordSetForm : AppForm
+{
+    readonly TextBox pass1 = new();
+    readonly TextBox pass2 = new();
+    readonly Label strength = new();
+    public string Password { get; private set; } = "";
+
+    public PasswordSetForm(string noteName)
+    {
+        Text = L.T($"قفل الملاحظة: {noteName}", $"Lock note: {noteName}");
+        RightToLeft = L.Rtl;
+        RightToLeftLayout = L.RtlLayout;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.CenterParent;
+        ClientSize = new Size(540, 300);
+        KeyPreview = true;
+
+        var warn = new Label
+        {
+            Text = L.T("تحذير: إن نسيت كلمة المرور فلا يمكن استرجاع الملاحظة إطلاقاً — لا يوجد باب خلفي.\n" +
+                       "يُنصح بعبارة من أربع أو خمس كلمات غير مترابطة بدل كلمة واحدة.",
+                       "Warning: if you forget the password the note cannot be recovered at all — there is no back door.\n" +
+                       "A passphrase of four or five unrelated words is safer than a single word."),
+            Left = 16, Top = 12, Width = 508, Height = 60
+        };
+
+        var l1 = new Label { Text = L.T("كلمة المرور:", "Password:"), Left = 16, Top = 80, Width = 508 };
+        pass1.SetBounds(16, 106, 508, 30);
+        pass1.UseSystemPasswordChar = true;
+        pass1.RightToLeft = RightToLeft.No;
+        pass1.AccessibleName = L.T("كلمة المرور", "Password");
+        pass1.TextChanged += (_, _) => UpdateStrength();
+
+        var l2 = new Label { Text = L.T("تأكيد كلمة المرور:", "Confirm password:"), Left = 16, Top = 144, Width = 508 };
+        pass2.SetBounds(16, 170, 508, 30);
+        pass2.UseSystemPasswordChar = true;
+        pass2.RightToLeft = RightToLeft.No;
+        pass2.AccessibleName = L.T("تأكيد كلمة المرور", "Confirm password");
+
+        strength.SetBounds(16, 206, 508, 24);
+        strength.AccessibleName = L.T("قوة كلمة المرور", "Password strength");
+
+        var ok = new Button { Text = L.T("قفل الملاحظة", "Lock the note"), Left = 16, Top = 240, Width = 160, Height = 36 };
+        ok.Click += (_, _) => Apply();
+        var cancel = new Button { Text = L.T("إلغاء", "Cancel"), Left = 186, Top = 240, Width = 130, Height = 36, DialogResult = DialogResult.Cancel };
+
+        Controls.AddRange(new Control[] { warn, l1, pass1, l2, pass2, strength, ok, cancel });
+        AcceptButton = ok;
+        CancelButton = cancel;
+        UpdateStrength();
+        Shown += (_, _) => pass1.Focus();
+    }
+
+    void UpdateStrength()
+    {
+        if (pass1.Text.Length == 0)
+        {
+            strength.Text = L.T("قوة كلمة المرور: —", "Password strength: —");
+            return;
+        }
+        var label = NoteCrypto.Rate(pass1.Text) switch
+        {
+            NoteCrypto.Strength.Weak => L.T("ضعيفة", "weak"),
+            NoteCrypto.Strength.Medium => L.T("متوسطة", "medium"),
+            _ => L.T("قوية", "strong"),
+        };
+        strength.Text = L.T($"قوة كلمة المرور: {label}", $"Password strength: {label}");
+    }
+
+    void Apply()
+    {
+        if (pass1.Text.Length < NoteCrypto.MinPasswordLength)
+        {
+            MessageBox.Show(this,
+                L.T($"كلمة المرور قصيرة جداً، الحد الأدنى {NoteCrypto.MinPasswordLength} محارف.",
+                    $"The password is too short; minimum {NoteCrypto.MinPasswordLength} characters."),
+                Text, MessageBoxButtons.OK, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button1, L.MsgOptions);
+            pass1.Focus();
+            return;
+        }
+        if (pass1.Text != pass2.Text)
+        {
+            MessageBox.Show(this,
+                L.T("كلمتا المرور غير متطابقتين.", "The two passwords do not match."),
+                Text, MessageBoxButtons.OK, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button1, L.MsgOptions);
+            pass2.SelectAll();
+            pass2.Focus();
+            return;
+        }
+        Password = pass1.Text;
+        DialogResult = DialogResult.OK;
+        Close();
     }
 }
 

@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms.Automation;
@@ -87,7 +88,16 @@ public class MainForm : AppForm
             }
         };
 
-        FormClosing += (_, _) => { SaveCurrent(); SyncTitleToFileName(false); settings.Save(); BackupOnExit(); };
+        FormClosing += (_, _) =>
+        {
+            SaveCurrent();
+            SyncTitleToFileName(false);
+            settings.Save();
+            BackupOnExit();
+            // محو مفاتيح الجلسة من الذاكرة عند الخروج
+            foreach (var k in sessionKeys.Values) k.Wipe();
+            sessionKeys.Clear();
+        };
     }
 
     // ---------- بناء الواجهة ----------
@@ -247,6 +257,10 @@ public class MainForm : AppForm
         file.DropDownItems.Add(MI(L.T("إظهار في مستكشف الملفات", "Show in File Explorer"), Keys.None, (_, _) => RevealSelected()));
         file.DropDownItems.Add(MI(L.T("حذف (نقل إلى المحذوفات)", "Delete (move to trash)"), Keys.None, (_, _) => DeleteSelected(), "Delete"));
         file.DropDownItems.Add(new ToolStripSeparator());
+        file.DropDownItems.Add(MI(L.T("قفل الملاحظة بكلمة مرور...", "Lock note with a password..."), Keys.None, (_, _) => LockSelectedNote()));
+        file.DropDownItems.Add(MI(L.T("إزالة القفل عن الملاحظة...", "Remove the note's lock..."), Keys.None, (_, _) => UnlockSelectedNote()));
+        file.DropDownItems.Add(MI(L.T("إقفال كل الملاحظات المفتوحة", "Lock all unlocked notes"), Keys.Control | Keys.Shift | Keys.L, (_, _) => LockAllSessions()));
+        file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(MI(L.T("حفظ", "Save"), Keys.Control | Keys.S, (_, _) => { SaveCurrent(announce: true); SyncTitleToFileName(true); }));
         file.DropDownItems.Add(MI(L.T("تحديث الشجرة", "Refresh tree"), Keys.F5, (_, _) => { LoadTree(); Announce(L.T("تم تحديث شجرة الملاحظات", "Notes tree refreshed")); }));
         file.DropDownItems.Add(new ToolStripSeparator());
@@ -364,10 +378,15 @@ public class MainForm : AppForm
 
             if (isNote)
             {
-                cm.Items.Add(Item(L.T("فتح كـ HTML في المتصفح", "Open as HTML in browser"), PreviewHtml));
+                bool locked = NoteCrypto.IsEncrypted(path);
+                if (!locked) cm.Items.Add(Item(L.T("فتح كـ HTML في المتصفح", "Open as HTML in browser"), PreviewHtml));
                 cm.Items.Add(Item(L.T("إعادة تسمية...", "Rename..."), RenameSelected));
                 cm.Items.Add(Item(L.T("نقل إلى...", "Move to..."), MoveSelected));
                 cm.Items.Add(Item(L.T("إظهار في مستكشف الملفات", "Show in File Explorer"), RevealSelected));
+                cm.Items.Add(new ToolStripSeparator());
+                cm.Items.Add(locked
+                    ? Item(L.T("إزالة القفل...", "Remove lock..."), UnlockSelectedNote)
+                    : Item(L.T("قفل بكلمة مرور...", "Lock with a password..."), LockSelectedNote));
                 cm.Items.Add(new ToolStripSeparator());
                 cm.Items.Add(Item(L.T("حذف", "Delete"), DeleteSelected));
             }
@@ -459,7 +478,10 @@ public class MainForm : AppForm
                 .Where(d => { var n = Path.GetFileName(d);
                               return !n.StartsWith('.') && !string.Equals(n, Vault.TrashFolderName, StringComparison.OrdinalIgnoreCase); })
                 .ToList();
-            files = Directory.GetFiles(dir, "*.md").ToList();
+            // الملاحظات العادية والمقفلة معاً في الشجرة (المقفلة خارج الفهرس والبحث فقط)
+            files = Directory.GetFiles(dir, "*.md")
+                .Concat(Directory.GetFiles(dir, "*" + NoteCrypto.Extension))
+                .ToList();
         }
         catch { return; }
 
@@ -483,7 +505,13 @@ public class MainForm : AppForm
                 parent.Nodes.Add(n);
             }
             else
-                parent.Nodes.Add(new TreeNode(Path.GetFileNameWithoutExtension(path)) { Tag = path });
+            {
+                // نُلحق "مقفلة" بالاسم كي يعلنها NVDA بوضوح عند التنقل في الشجرة
+                var label = NoteCrypto.IsEncrypted(path)
+                    ? L.T($"{vault.DisplayName(path)} (مقفلة)", $"{vault.DisplayName(path)} (locked)")
+                    : vault.DisplayName(path);
+                parent.Nodes.Add(new TreeNode(label) { Tag = path });
+            }
         }
     }
 
@@ -576,13 +604,65 @@ public class MainForm : AppForm
 
     // ---------- فتح وحفظ ----------
 
+    /// <summary>
+    /// مفاتيح الجلسة للملاحظات المقفلة: تبقى في الذاكرة حتى إقفال الكل أو إغلاق التطبيق،
+    /// فلا يُطلب من المستخدم كتابة كلمة المرور مع كل حفظ.
+    /// </summary>
+    readonly Dictionary<string, NoteKey> sessionKeys = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// يقرأ نص ملاحظة، ويطلب كلمة المرور إن كانت مقفلة ولم يُفتح مفتاحها في هذه الجلسة.
+    /// يعيد false إن ألغى المستخدم أو فشل فك التشفير، فلا تتغيّر حالة المحرر.
+    /// </summary>
+    bool TryReadNote(string path, out string text)
+    {
+        text = "";
+        if (!NoteCrypto.IsEncrypted(path))
+        {
+            try { text = File.ReadAllText(path); return true; }
+            catch (Exception ex) { Msg(L.T("تعذر فتح الملاحظة: ", "Could not open the note: ") + ex.Message); return false; }
+        }
+
+        byte[] data;
+        try { data = File.ReadAllBytes(path); }
+        catch (Exception ex) { Msg(L.T("تعذر فتح الملاحظة: ", "Could not open the note: ") + ex.Message); return false; }
+
+        if (sessionKeys.TryGetValue(path, out var known))
+        {
+            try { text = NoteCrypto.Decrypt(data, known); return true; }
+            catch { sessionKeys.Remove(path); }   // مفتاح لم يعد صالحاً (تغيّر الملف مثلاً)
+        }
+
+        var password = InputBox.Show(this,
+            L.T($"ملاحظة مقفلة: {vault.DisplayName(path)}", $"Locked note: {vault.DisplayName(path)}"),
+            L.T("كلمة المرور:", "Password:"), "", allowEmpty: false, password: true);
+        if (password == null) { Announce(L.T("أُلغي فتح الملاحظة المقفلة", "Opening the locked note was cancelled")); return false; }
+
+        try
+        {
+            var key = NoteCrypto.DeriveKeyFor(data, password);
+            text = NoteCrypto.Decrypt(data, key);
+            sessionKeys[path] = key;
+            return true;
+        }
+        catch (CryptographicException)
+        {
+            Msg(L.T("كلمة المرور غير صحيحة، أو الملف تالف أو عُبث به.",
+                    "Wrong password, or the file is damaged or tampered with."));
+            return false;
+        }
+        catch (Exception ex)
+        {
+            Msg(L.T("تعذّر فك التشفير: ", "Could not decrypt: ") + ex.Message);
+            return false;
+        }
+    }
+
     void OpenNote(string path, int line = -1, bool announceOpen = true)
     {
         SaveCurrent();
         if (!File.Exists(path)) { Announce(L.T("الملف غير موجود", "File not found")); return; }
-        string text;
-        try { text = File.ReadAllText(path); }
-        catch (Exception ex) { Msg(L.T("تعذر فتح الملاحظة: ", "Could not open the note: ") + ex.Message); return; }
+        if (!TryReadNote(path, out string text)) return;
 
         loading = true;
         editor.Text = text.Replace("\r\n", "\n").Replace("\n", "\r\n");
@@ -618,7 +698,19 @@ public class MainForm : AppForm
         if (!ResolveExternalChange()) return;   // عولج التعارض بإعادة تحميل، فلا نكتب
         try
         {
-            File.WriteAllText(currentNote, editor.Text, new UTF8Encoding(false));
+            if (NoteCrypto.IsEncrypted(currentNote))
+            {
+                if (!sessionKeys.TryGetValue(currentNote, out var key))
+                {
+                    // لا مفتاح في الجلسة: لا نكتب شيئاً كي لا نتلف الملف المقفل
+                    Announce(L.T("الملاحظة مقفلة ولا يمكن حفظها دون فتحها أولاً",
+                                 "The note is locked and cannot be saved before unlocking it"));
+                    return;
+                }
+                File.WriteAllBytes(currentNote, NoteCrypto.Encrypt(editor.Text, key));
+            }
+            else File.WriteAllText(currentNote, editor.Text, new UTF8Encoding(false));
+
             dirty = false;
             currentNoteStamp = StampOf(currentNote);
             if (announce) Announce(L.T("تم الحفظ", "Saved"));
@@ -690,9 +782,10 @@ public class MainForm : AppForm
         if (currentNote == null || !File.Exists(currentNote)) return;
         try
         {
+            if (!TryReadNote(currentNote, out string fresh)) return;
             int caret = editor.SelectionStart;
             loading = true;
-            editor.Text = File.ReadAllText(currentNote).Replace("\r\n", "\n").Replace("\n", "\r\n");
+            editor.Text = fresh.Replace("\r\n", "\n").Replace("\n", "\r\n");
             loading = false;
             dirty = false;
             currentNoteStamp = StampOf(currentNote);
@@ -773,7 +866,9 @@ public class MainForm : AppForm
         var newName = InputBox.Show(this, L.T("إعادة تسمية", "Rename"), L.T("الاسم الجديد:", "New name:"), oldName);
         if (newName == null || newName == oldName) return;
         newName = Vault.Sanitize(newName);
-        var dest = Path.Combine(Path.GetDirectoryName(path)!, isFile ? newName + ".md" : newName);
+        // الملاحظة المقفلة تحتفظ بامتدادها المزدوج كي تبقى معروفة كملف مشفّر
+        var extension = !isFile ? "" : NoteCrypto.IsEncrypted(path) ? NoteCrypto.Extension : ".md";
+        var dest = Path.Combine(Path.GetDirectoryName(path)!, newName + extension);
         if (File.Exists(dest) || Directory.Exists(dest))
         {
             Msg(L.T("يوجد عنصر بهذا الاسم بالفعل.", "An item with this name already exists."));
@@ -868,6 +963,7 @@ public class MainForm : AppForm
     {
         if (!settings.SyncTitleToFileName) return;
         if (syncingTitle || loading || currentNote == null || !File.Exists(currentNote)) return;
+        if (NoteCrypto.IsEncrypted(currentNote)) return;   // اسم الملاحظة المقفلة يُغيّر يدوياً فقط
 
         var lines = editor.Lines;
         if (lines.Length == 0) return;
@@ -924,6 +1020,154 @@ public class MainForm : AppForm
                 Announce(L.T("تعذّرت مزامنة اسم الملف: ", "Could not sync the file name: ") + ex.Message);
         }
         finally { syncingTitle = false; }
+    }
+
+    // ---------- قفل الملاحظات الحساسة ----------
+
+    /// <summary>
+    /// يقفل الملاحظة المحددة بكلمة مرور: يشفّرها إلى ملف .md.enc ويحذف الأصل الواضح.
+    /// الأصل لا يذهب إلى سلة المحذوفات عمداً — وإلا بقيت نسخة مقروءة داخل القبو.
+    /// </summary>
+    void LockSelectedNote()
+    {
+        string? path = tree.SelectedNode?.Tag as string ?? currentNote;
+        if (path == null || !File.Exists(path))
+        {
+            Announce(L.T("لا توجد ملاحظة محددة", "No note selected"));
+            return;
+        }
+        if (NoteCrypto.IsEncrypted(path)) { Announce(L.T("الملاحظة مقفلة بالفعل", "The note is already locked")); return; }
+
+        if (!settings.EncryptionWarned)
+        {
+            var ack = MessageBox.Show(this,
+                L.T("قفل الملاحظة يشفّرها بكلمة مرور لا يعرفها أحد سواك.\n\n" +
+                    "• إن نسيت كلمة المرور فلا سبيل لاسترجاع الملاحظة إطلاقاً.\n" +
+                    "• اسم الملف يبقى ظاهراً، فلا تضع سراً في العنوان.\n" +
+                    "• لن تعمل معاينة HTML على الملاحظات المقفلة، ولن تظهر في البحث ما لم تفتحها.\n\n" +
+                    "هل تريد المتابعة؟",
+                    "Locking a note encrypts it with a password only you know.\n\n" +
+                    "• If you forget the password the note cannot be recovered at all.\n" +
+                    "• The file name stays visible, so do not put secrets in the title.\n" +
+                    "• HTML preview is disabled for locked notes, and they stay out of search until opened.\n\n" +
+                    "Continue?"),
+                L.T("قفل الملاحظات", "Locking notes"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2, L.MsgOptions);
+            if (ack != DialogResult.Yes) return;
+            settings.EncryptionWarned = true;
+            settings.Save();
+        }
+
+        using var dlg = new PasswordSetForm(vault.DisplayName(path));
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        bool isCurrent = string.Equals(path, currentNote, StringComparison.OrdinalIgnoreCase);
+        if (isCurrent) SaveCurrent();
+
+        string text;
+        try { text = File.ReadAllText(path); }
+        catch (Exception ex) { Msg(L.T("تعذّرت القراءة: ", "Could not read: ") + ex.Message); return; }
+
+        var dest = path + ".enc";          // الاسم.md.enc
+        try
+        {
+            if (File.Exists(dest)) { Msg(L.T("يوجد ملف مقفل بهذا الاسم بالفعل.", "A locked file with this name already exists.")); return; }
+            var key = NoteCrypto.CreateKey(dlg.Password);
+            File.WriteAllBytes(dest, NoteCrypto.Encrypt(text, key));
+
+            // تحقق قاطع قبل حذف الأصل: نقرأ الملف المشفّر ونفك تشفيره بكلمة المرور نفسها.
+            // لو أخفق أي شيء نُبقي الأصل ونحذف المشفّر — فلا تضيع ملاحظة أبداً.
+            var written = File.ReadAllBytes(dest);
+            if (NoteCrypto.Decrypt(written, NoteCrypto.DeriveKeyFor(written, dlg.Password)) != text)
+                throw new CryptographicException("فشل التحقق من الملف المشفّر");
+
+            File.Delete(path);             // حذف مباشر لا إلى السلة كي لا تبقى نسخة مقروءة
+            sessionKeys[dest] = key;
+        }
+        catch (Exception ex)
+        {
+            // الأصل ما زال سليماً: نزيل الملف المشفّر الناقص كي لا يبقى نصفَ عمل
+            try { if (File.Exists(dest) && File.Exists(path)) File.Delete(dest); } catch { }
+            Msg(L.T("تعذّر القفل ولم تتغيّر ملاحظتك: ", "Locking failed and your note is unchanged: ") + ex.Message);
+            return;
+        }
+
+        if (isCurrent)
+        {
+            currentNote = dest;
+            currentNoteStamp = StampOf(dest);
+            Text = $"{vault.DisplayName(dest)} — {L.T("دفتري", "Daftari")}";
+        }
+        LoadTree();
+        SelectNodeFor(dest);
+        Announce(L.T($"قُفلت الملاحظة {vault.DisplayName(dest)}", $"Locked note {vault.DisplayName(dest)}"));
+    }
+
+    /// <summary>يزيل القفل عن ملاحظة مقفلة ويعيدها ملف Markdown عادياً بعد تأكيد.</summary>
+    void UnlockSelectedNote()
+    {
+        string? path = tree.SelectedNode?.Tag as string ?? currentNote;
+        if (path == null || !File.Exists(path) || !NoteCrypto.IsEncrypted(path))
+        {
+            Announce(L.T("اختر ملاحظة مقفلة أولاً", "Select a locked note first"));
+            return;
+        }
+        var answer = MessageBox.Show(this,
+            L.T($"إزالة القفل عن \"{vault.DisplayName(path)}\"؟ ستعود ملاحظة عادية يقرؤها أي برنامج.",
+                $"Remove the lock from \"{vault.DisplayName(path)}\"? It becomes a normal note any program can read."),
+            L.T("إزالة القفل", "Remove lock"), MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button2, L.MsgOptions);
+        if (answer != DialogResult.Yes) return;
+
+        if (!TryReadNote(path, out string text)) return;   // يطلب كلمة المرور إن لزم
+
+        var dest = path[..^NoteCrypto.Extension.Length] + ".md";
+        try
+        {
+            if (File.Exists(dest)) { Msg(L.T("يوجد ملف بهذا الاسم بالفعل.", "A file with this name already exists.")); return; }
+            File.WriteAllText(dest, text, new UTF8Encoding(false));
+            File.Delete(path);
+            if (sessionKeys.Remove(path, out var key)) key.Wipe();
+        }
+        catch (Exception ex) { Msg(L.T("تعذّرت إزالة القفل: ", "Could not remove the lock: ") + ex.Message); return; }
+
+        if (string.Equals(path, currentNote, StringComparison.OrdinalIgnoreCase))
+        {
+            currentNote = dest;
+            currentNoteStamp = StampOf(dest);
+            Text = $"{vault.DisplayName(dest)} — {L.T("دفتري", "Daftari")}";
+        }
+        LoadTree();
+        SelectNodeFor(dest);
+        Announce(L.T($"أُزيل القفل عن {vault.DisplayName(dest)}", $"Lock removed from {vault.DisplayName(dest)}"));
+    }
+
+    /// <summary>يمحو مفاتيح الجلسة من الذاكرة فتُطلب كلمة المرور من جديد عند أي فتح.</summary>
+    void LockAllSessions()
+    {
+        if (sessionKeys.Count == 0) { Announce(L.T("لا توجد ملاحظات مفتوحة بكلمة مرور", "No notes are unlocked")); return; }
+
+        // إن كانت الملاحظة المفتوحة مقفلة نحفظها ثم نفرغ المحرر كي لا يبقى نصها ظاهراً
+        bool currentLocked = currentNote != null && NoteCrypto.IsEncrypted(currentNote);
+        if (currentLocked) SaveCurrent();
+
+        int n = sessionKeys.Count;
+        foreach (var k in sessionKeys.Values) k.Wipe();
+        sessionKeys.Clear();
+
+        if (currentLocked)
+        {
+            loading = true;
+            editor.Text = "";
+            loading = false;
+            dirty = false;
+            currentNote = null;
+            ResetHistory();
+            Text = L.T("دفتري", "Daftari");
+            UpdateCount();
+        }
+        Announce(L.T($"أُقفلت {n} ملاحظة، وسُتطلب كلمة المرور من جديد",
+                     $"Locked {n} notes; the password will be asked again"));
     }
 
     void MoveSelected()
@@ -1659,6 +1903,13 @@ public class MainForm : AppForm
     void PreviewHtml()
     {
         if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
+        // المعاينة تكتب ملفاً مؤقتاً غير مشفّر على القرص، فتُمنع على الملاحظات المقفلة
+        if (NoteCrypto.IsEncrypted(currentNote))
+        {
+            Msg(L.T("المعاينة معطّلة للملاحظات المقفلة، لأنها تكتب نسخة غير مشفّرة مؤقتة على القرص.",
+                    "Preview is disabled for locked notes because it writes a temporary unencrypted copy to disk."));
+            return;
+        }
         SaveCurrent();
         var name = vault.DisplayName(currentNote);
 
@@ -2092,6 +2343,12 @@ Ctrl+Shift+B — نسخة احتياطية الآن
 (وهناك نسخة تلقائية عند إغلاق التطبيق، تُضبط من الإعدادات
 مع عدد النسخ المحفوظة ويُحذف الأقدم تلقائياً)
 Ctrl+, — الإعدادات (اللغة، تنسيق التاريخ، مجلد النسخ الاحتياطي)
+
+قفل الملاحظات الحساسة (قائمة ملف أو قائمة السياق):
+"قفل الملاحظة بكلمة مرور" يشفّرها بمعيار AES-256-GCM ويحذف الأصل الواضح،
+و"إزالة القفل" تعيدها ملاحظة عادية، وCtrl+Shift+L يُقفل كل ما فتحته في الجلسة.
+تنبيهات: نسيان كلمة المرور يعني ضياع الملاحظة بلا استرجاع، واسم الملف يبقى
+ظاهراً، والملاحظات المقفلة خارج البحث والمعاينة ما لم تفتحها.
 مفتاح قائمة السياق (أو Shift+F10) على أي عنصر في الشجرة —
 قائمة إجراءات تتكيّف: فتح كـ HTML، تسمية، نقل، مشاركة مجلد كـ zip، حذف
 قائمة ملف > المحذوفات... — استرجاع المحذوف أو حذفه نهائياً أو إفراغ السلة
@@ -2181,6 +2438,13 @@ Ctrl+Shift+B — back up now
 (an automatic backup also runs when the app closes; configure it and
 how many backups to keep in Settings — the oldest are deleted)
 Ctrl+, — settings (language, date format, backup folder)
+
+Locking sensitive notes (File menu or the context menu):
+"Lock note with a password" encrypts it with AES-256-GCM and deletes the
+plain original; "Remove the note's lock" restores a normal note; Ctrl+Shift+L
+locks everything unlocked this session.
+Notes: forgetting the password means the note is unrecoverable, the file name
+stays visible, and locked notes stay out of search and preview until opened.
 Applications key (or Shift+F10) on any tree item —
 an actions menu that adapts: open as HTML, rename, move, share folder as zip, delete
 File menu > Trash... — restore, permanently delete, or empty the trash

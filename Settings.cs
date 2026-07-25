@@ -30,6 +30,8 @@ public class Settings
     public bool SyncTitleToFileName { get; set; } = true;
     /// <summary>فتح منتقي الملاحظات تلقائياً عند كتابة قوسين مربعين [[ لإكمال الرابط.</summary>
     public bool LinkAutocomplete { get; set; } = true;
+    /// <summary>هل عُرض تحذير القفل بكلمة مرور مرة واحدة؟</summary>
+    public bool EncryptionWarned { get; set; }
 
     static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Daftari");
