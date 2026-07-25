@@ -26,6 +26,8 @@ public class Settings
     public bool AutoBackupOnExit { get; set; } = true;
     /// <summary>عدد النسخ الاحتياطية المحفوظة لكل قبو؛ يُحذف الأقدم تلقائياً.</summary>
     public int BackupKeep { get; set; } = 10;
+    /// <summary>مزامنة اسم ملف الملاحظة مع عنوانها (السطر الأول # عنوان) عند الحفظ والمغادرة.</summary>
+    public bool SyncTitleToFileName { get; set; } = true;
 
     static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Daftari");

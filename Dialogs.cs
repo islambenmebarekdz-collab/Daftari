@@ -623,6 +623,7 @@ public class SettingsForm : AppForm
     readonly TextBox backupPath = new();
     readonly CheckBox autoBackup = new();
     readonly NumericUpDown backupKeep = new();
+    readonly CheckBox syncTitle = new();
 
     public bool LanguageChanged { get; private set; }
 
@@ -637,7 +638,7 @@ public class SettingsForm : AppForm
         MaximizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(560, 470);
+        ClientSize = new Size(560, 520);
 
         int y = 16;
         void AddLabel(string text)
@@ -714,6 +715,14 @@ public class SettingsForm : AppForm
         Controls.Add(backupKeep);
         y += 44;
 
+        syncTitle.Text = L.T("مزامنة اسم الملف مع عنوان الملاحظة (السطر الأول)",
+                             "Sync the file name with the note title (first line)");
+        syncTitle.SetBounds(16, y, 500, 28);
+        syncTitle.AccessibleName = syncTitle.Text;
+        syncTitle.Checked = settings.SyncTitleToFileName;
+        Controls.Add(syncTitle);
+        y += 40;
+
         var ok = new Button { Text = L.T("حفظ", "Save"), DialogResult = DialogResult.OK, Width = 110 };
         ok.SetBounds(16, y, 110, 34);
         var cancel = new Button { Text = L.T("إلغاء", "Cancel"), DialogResult = DialogResult.Cancel, Width = 110 };
@@ -735,7 +744,108 @@ public class SettingsForm : AppForm
         settings.BackupFolder = backupPath.Text.Trim().Length > 0 ? backupPath.Text.Trim() : null;
         settings.AutoBackupOnExit = autoBackup.Checked;
         settings.BackupKeep = (int)backupKeep.Value;
+        settings.SyncTitleToFileName = syncTitle.Checked;
         settings.Save();
+    }
+}
+
+/// <summary>
+/// منتقي مجلد بشجرة حقيقية (أب/ابن) بدل قائمة مسارات مسطّحة — أسهل تصفحاً
+/// في قبو متشعّب، وNVDA يعلن المستوى والتوسيع كأي شجرة ويندوز.
+/// </summary>
+public class FolderPickerForm : AppForm
+{
+    readonly TreeView tree = new();
+    public string? SelectedFolder { get; private set; }
+
+    public FolderPickerForm(Vault vault, string title, string prompt, string? preselect = null)
+    {
+        Text = title;
+        RightToLeft = L.Rtl;
+        RightToLeftLayout = L.RtlLayout;
+        StartPosition = FormStartPosition.CenterParent;
+        ShowInTaskbar = false;
+        MinimizeBox = false;
+        ClientSize = new Size(560, 480);
+        KeyPreview = true;
+
+        var lbl = new Label { Text = prompt, Dock = DockStyle.Top, Height = 28, Padding = new Padding(8, 6, 8, 0) };
+        tree.Dock = DockStyle.Fill;
+        tree.AccessibleName = L.T("شجرة المجلدات", "Folder tree");
+        tree.RightToLeftLayout = L.RtlLayout;
+        tree.HideSelection = false;
+        tree.ItemHeight = 28;
+        tree.ShowLines = false;
+        tree.FullRowSelect = true;
+
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(8, 6, 8, 6) };
+        var ok = new Button { Text = L.T("نقل إلى هنا", "Move here"), AutoSize = true };
+        ok.Click += (_, _) => Accept();
+        var cancel = new Button { Text = L.T("إلغاء", "Cancel"), AutoSize = true, DialogResult = DialogResult.Cancel };
+        buttons.Controls.AddRange(new Control[] { ok, cancel });
+
+        Controls.Add(tree);
+        Controls.Add(buttons);
+        Controls.Add(lbl);
+        CancelButton = cancel;
+
+        BuildTree(vault);
+
+        tree.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { Accept(); e.SuppressKeyPress = true; } };
+        tree.DoubleClick += (_, _) => Accept();
+        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); } };
+
+        if (preselect != null) SelectPath(tree.Nodes, preselect);
+        Shown += (_, _) => tree.Focus();
+    }
+
+    void BuildTree(Vault vault)
+    {
+        tree.BeginUpdate();
+        tree.Nodes.Clear();
+        var byPath = new Dictionary<string, TreeNode>(StringComparer.OrdinalIgnoreCase);
+        var rootNode = new TreeNode(L.T($"(جذر القبو) {Path.GetFileName(vault.Root)}",
+                                       $"(vault root) {Path.GetFileName(vault.Root)}")) { Tag = vault.Root };
+        byPath[Path.GetFullPath(vault.Root)] = rootNode;
+        tree.Nodes.Add(rootNode);
+
+        // المجلدات مرتّبة بالمسار كي يسبق الأب ابنه دائماً فيجد كل ابنٍ عقدةَ أبيه
+        foreach (var folder in vault.AllFolders()
+                     .Select(Path.GetFullPath)
+                     .Where(f => !string.Equals(f, Path.GetFullPath(vault.Root), StringComparison.OrdinalIgnoreCase))
+                     .OrderBy(f => f, StringComparer.CurrentCultureIgnoreCase))
+        {
+            var node = new TreeNode(Path.GetFileName(folder)) { Tag = folder };
+            var parent = Path.GetDirectoryName(folder);
+            if (parent != null && byPath.TryGetValue(parent, out var parentNode)) parentNode.Nodes.Add(node);
+            else rootNode.Nodes.Add(node);
+            byPath[folder] = node;
+        }
+        rootNode.ExpandAll();
+        tree.EndUpdate();
+        tree.SelectedNode = rootNode;
+    }
+
+    bool SelectPath(TreeNodeCollection nodes, string path)
+    {
+        foreach (TreeNode n in nodes)
+        {
+            if (string.Equals(n.Tag as string, Path.GetFullPath(path), StringComparison.OrdinalIgnoreCase))
+            {
+                tree.SelectedNode = n;
+                return true;
+            }
+            if (SelectPath(n.Nodes, path)) return true;
+        }
+        return false;
+    }
+
+    void Accept()
+    {
+        if (tree.SelectedNode?.Tag is not string path) return;
+        SelectedFolder = path;
+        DialogResult = DialogResult.OK;
+        Close();
     }
 }
 

@@ -79,7 +79,7 @@ public class MainForm : AppForm
             }
         };
 
-        FormClosing += (_, _) => { SaveCurrent(); settings.Save(); BackupOnExit(); };
+        FormClosing += (_, _) => { SaveCurrent(); SyncTitleToFileName(false); settings.Save(); BackupOnExit(); };
     }
 
     // ---------- بناء الواجهة ----------
@@ -139,6 +139,8 @@ public class MainForm : AppForm
             burstTimer.Start();
             lastText = editor.Text;
         };
+        // مغادرة المحرر لحظة مناسبة لمزامنة اسم الملف مع العنوان (لا أثناء الكتابة)
+        editor.Leave += (_, _) => SyncTitleToFileName(false);
         editor.KeyDown += (_, e) =>
         {
             if (e.Control && e.KeyCode == Keys.A)
@@ -227,7 +229,7 @@ public class MainForm : AppForm
         file.DropDownItems.Add(MI(L.T("إظهار في مستكشف الملفات", "Show in File Explorer"), Keys.None, (_, _) => RevealSelected()));
         file.DropDownItems.Add(MI(L.T("حذف (نقل إلى المحذوفات)", "Delete (move to trash)"), Keys.None, (_, _) => DeleteSelected(), "Delete"));
         file.DropDownItems.Add(new ToolStripSeparator());
-        file.DropDownItems.Add(MI(L.T("حفظ", "Save"), Keys.Control | Keys.S, (_, _) => SaveCurrent(announce: true)));
+        file.DropDownItems.Add(MI(L.T("حفظ", "Save"), Keys.Control | Keys.S, (_, _) => { SaveCurrent(announce: true); SyncTitleToFileName(true); }));
         file.DropDownItems.Add(MI(L.T("تحديث الشجرة", "Refresh tree"), Keys.F5, (_, _) => { LoadTree(); Announce(L.T("تم تحديث شجرة الملاحظات", "Notes tree refreshed")); }));
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(MI(L.T("نسخة احتياطية الآن", "Back up now"), Keys.Control | Keys.Shift | Keys.B, (_, _) => BackupNow()));
@@ -735,6 +737,74 @@ public class MainForm : AppForm
         Announce(L.T($"نُقل {kind} {name} إلى المحذوفات", $"Moved {kind} {name} to trash"));
     }
 
+    bool syncingTitle;
+
+    /// <summary>
+    /// يزامن اسم ملف الملاحظة مع عنوانها: إن كان السطر الأول عنواناً من المستوى الأول (# عنوان)
+    /// ويختلف عن اسم الملف، يُعاد تسمية الملف وتُحدَّث كل الروابط المشيرة إليه.
+    /// يقتصر على المستوى الأول تفادياً لتغييرات غير مقصودة، ويُستدعى عند الحفظ الصريح
+    /// ومغادرة المحرر وإغلاق التطبيق — لا أثناء الكتابة.
+    /// </summary>
+    void SyncTitleToFileName(bool announceProblems)
+    {
+        if (!settings.SyncTitleToFileName) return;
+        if (syncingTitle || loading || currentNote == null || !File.Exists(currentNote)) return;
+
+        var lines = editor.Lines;
+        if (lines.Length == 0) return;
+        var first = lines[0].TrimStart();
+        if (!first.StartsWith("# ")) return;               // المستوى الأول فقط، لا ## فأكثر
+        var title = Vault.Sanitize(first[2..].Trim());
+        if (title.Length == 0) return;
+
+        var oldName = vault.DisplayName(currentNote);
+        if (string.Equals(title, oldName, StringComparison.Ordinal)) return;
+
+        var dest = Path.Combine(Path.GetDirectoryName(currentNote)!, title + ".md");
+        if (File.Exists(dest) || Directory.Exists(dest))
+        {
+            // لا نضيف لاحقة رقمية هنا: اسم مختلف عن العنوان يعيد المحاولة كل مرة وينتج ملفات متكاثرة
+            if (announceProblems)
+                Announce(L.T($"يوجد عنصر باسم {title} بالفعل، لم تُعد تسمية الملف",
+                             $"An item named {title} already exists; the file was not renamed"));
+            return;
+        }
+
+        syncingTitle = true;
+        try
+        {
+            SaveCurrent();                                  // ضمان كتابة المحتوى قبل النقل
+            File.Move(currentNote, dest);
+            currentNote = dest;
+
+            int updated = vault.UpdateLinks(oldName, title);
+            if (updated > 0)
+            {
+                // قد تكون الملاحظة المفتوحة من الملفات المحدّثة على القرص
+                int caret = editor.SelectionStart;
+                loading = true;
+                editor.Text = File.ReadAllText(currentNote).Replace("\r\n", "\n").Replace("\n", "\r\n");
+                loading = false;
+                dirty = false;
+                ResetHistory();
+                editor.Select(Math.Min(caret, editor.TextLength), 0);
+            }
+
+            LoadTree();
+            Text = $"{title} — {L.T("دفتري", "Daftari")}";
+            Announce(updated > 0
+                ? L.T($"صار اسم الملف {title} وحُدّث {updated} رابط",
+                      $"File renamed to {title}; {updated} links updated")
+                : L.T($"صار اسم الملف {title}", $"File renamed to {title}"));
+        }
+        catch (Exception ex)
+        {
+            if (announceProblems)
+                Announce(L.T("تعذّرت مزامنة اسم الملف: ", "Could not sync the file name: ") + ex.Message);
+        }
+        finally { syncingTitle = false; }
+    }
+
     void MoveSelected()
     {
         string? path = tree.SelectedNode?.Tag as string ?? currentNote;
@@ -746,17 +816,11 @@ public class MainForm : AppForm
         bool isFolder = Directory.Exists(path);
         var itemName = isFolder ? Path.GetFileName(path) : Path.GetFileNameWithoutExtension(path);
 
-        using var picker = new ListPickForm(
+        using var picker = new FolderPickerForm(vault,
             L.T($"نقل \"{itemName}\" إلى مجلد", $"Move \"{itemName}\" to folder"),
-            L.T("اختر مجلد الوجهة", "Choose the destination folder"));
-        foreach (var folder in vault.AllFolders())
-        {
-            var display = string.Equals(folder, vault.Root, StringComparison.OrdinalIgnoreCase)
-                ? L.T("(جذر القبو)", "(vault root)")
-                : Path.GetRelativePath(vault.Root, folder);
-            picker.AddItem(display, folder);
-        }
-        if (picker.ShowDialog(this) != DialogResult.OK || picker.Result is not string dest) return;
+            L.T("اختر مجلد الوجهة ثم اضغط Enter:", "Choose the destination folder, then press Enter:"),
+            preselect: Path.GetDirectoryName(path));
+        if (picker.ShowDialog(this) != DialogResult.OK || picker.SelectedFolder is not string dest) return;
 
         if (!vault.CanMoveInto(path, dest, out var reason))
         {
@@ -1825,7 +1889,9 @@ public class MainForm : AppForm
 Ctrl+N — ملاحظة جديدة
 Ctrl+Shift+N — مجلد جديد
 F2 — إعادة تسمية العنصر المحدد
-Ctrl+Shift+M — نقل الملاحظة أو المجلد إلى مجلد آخر
+Ctrl+Shift+M — نقل الملاحظة أو المجلد إلى مجلد آخر (شجرة مجلدات)
+تغيير السطر الأول (# عنوان) يعيد تسمية الملف تلقائياً عند الحفظ
+أو مغادرة المحرر، ويحدّث الروابط (يُعطَّل من الإعدادات)
 Delete (في الشجرة) — نقل إلى المحذوفات
 Ctrl+S — حفظ (الحفظ يتم تلقائياً أيضاً)
 F5 — تحديث شجرة الملاحظات
@@ -1910,7 +1976,9 @@ Files:
 Ctrl+N — new note
 Ctrl+Shift+N — new folder
 F2 — rename selected item
-Ctrl+Shift+M — move the note or folder to another folder
+Ctrl+Shift+M — move the note or folder to another folder (folder tree)
+Editing the first line (# title) renames the file automatically on save
+or when leaving the editor, and updates links (can be disabled in Settings)
 Delete (in the tree) — move to trash
 Ctrl+S — save (autosave also runs)
 F5 — refresh the notes tree
