@@ -86,6 +86,12 @@ public class MainForm : AppForm
                 ToggleLastNote();
                 e.SuppressKeyPress = true;
             }
+            // بديل لقائمة المهام لمن تصله توليفات Ctrl+Shift (بعض الأجهزة تعترضها)
+            else if (e.Control && e.Shift && !e.Alt && e.KeyCode == Keys.O)
+            {
+                ShowTasks();
+                e.SuppressKeyPress = true;
+            }
         };
 
         FormClosing += (_, _) =>
@@ -205,6 +211,12 @@ public class MainForm : AppForm
                 Redo();
                 e.SuppressKeyPress = true;
             }
+            // بديل لتبديل المهمة لمن تصله توليفات Ctrl+Shift
+            else if (e.Control && e.Shift && !e.Alt && e.KeyCode == Keys.X)
+            {
+                ToggleTaskAtCaret();
+                e.SuppressKeyPress = true;
+            }
         };
 
         var editorHost = new Panel
@@ -287,7 +299,7 @@ public class MainForm : AppForm
         edit.DropDownItems.Add(MI(L.T("إدراج رابط لملاحظة...", "Insert link to a note..."), Keys.Control | Keys.K, (_, _) => InsertLink()));
         edit.DropDownItems.Add(MI(L.T("إدراج كتلة كود...", "Insert code block..."), Keys.Control | Keys.Shift | Keys.K, (_, _) => InsertCodeBlock()));
         edit.DropDownItems.Add(MI(L.T("جدول: إنشاء أو تحرير...", "Table: create or edit..."), Keys.Control | Keys.Shift | Keys.G, (_, _) => EditTable()));
-        edit.DropDownItems.Add(MI(L.T("مهمة: إنشاء أو تبديل الإنجاز", "Task: create or toggle done"), Keys.Control | Keys.Shift | Keys.X, (_, _) => ToggleTaskAtCaret()));
+        edit.DropDownItems.Add(MI(L.T("مهمة: إنشاء أو تبديل الإنجاز", "Task: create or toggle done"), Keys.F4, (_, _) => ToggleTaskAtCaret()));
         edit.DropDownItems.Add(MI(L.T("إدراج التاريخ والوقت", "Insert date and time"), Keys.Control | Keys.Shift | Keys.T, (_, _) => InsertTimestamp()));
         edit.DropDownItems.Add(MI(L.T("نسخ الملاحظة كاملة", "Copy entire note"), Keys.Control | Keys.Shift | Keys.C, (_, _) => CopyNote()));
         edit.DropDownItems.Add(MI(L.T("معاينة HTML في المتصفح", "HTML preview in browser"), Keys.Control | Keys.Shift | Keys.H, (_, _) => PreviewHtml()));
@@ -312,7 +324,7 @@ public class MainForm : AppForm
         nav.DropDownItems.Add(MI(L.T("الروابط الصادرة...", "Outgoing links..."), Keys.Control | Keys.L, (_, _) => ShowOutgoingLinks()));
         nav.DropDownItems.Add(MI(L.T("عناوين الملاحظة...", "Note headings..."), Keys.Control | Keys.J, (_, _) => ShowHeadings()));
         nav.DropDownItems.Add(MI(L.T("الوسوم...", "Tags..."), Keys.Control | Keys.T, (_, _) => ShowTags()));
-        nav.DropDownItems.Add(MI(L.T("كل المهام...", "All tasks..."), Keys.Control | Keys.Shift | Keys.O, (_, _) => ShowTasks()));
+        nav.DropDownItems.Add(MI(L.T("كل المهام...", "All tasks..."), Keys.Control | Keys.M, (_, _) => ShowTasks()));
         nav.DropDownItems.Add(MI(L.T("ملاحظة اليوم", "Today's note"), Keys.Control | Keys.D, (_, _) => OpenDailyNote()));
         nav.DropDownItems.Add(new ToolStripSeparator());
         nav.DropDownItems.Add(MI(L.T("البحث في كل الملاحظات...", "Search all notes..."), Keys.Control | Keys.Shift | Keys.F, (_, _) => SearchVault()));
@@ -2595,8 +2607,8 @@ Ctrl+Shift+F — البحث في كل ملاحظات القبو
 Ctrl+T — استعراض الوسوم (اكتب #وسم في أي ملاحظة)
 
 المهام:
-Ctrl+Shift+X — يحوّل السطر إلى مهمة، أو يبدّل بين مفتوحة ومنجزة
-Ctrl+Shift+O — كل مهام القبو في قائمة واحدة: Enter يفتح مصدر المهمة،
+F4 — يحوّل السطر إلى مهمة، أو يبدّل بين مفتوحة ومنجزة (أو Ctrl+Shift+X)
+Ctrl+M — كل مهام القبو في قائمة واحدة (أو Ctrl+Shift+O): Enter يفتح مصدر المهمة،
 ومسافة أو F2 تعلّمها منجزة من مكانها دون مغادرة القائمة
 
 التحرير:
@@ -2700,8 +2712,8 @@ Ctrl+Shift+F — search all notes in the vault
 Ctrl+T — browse tags (write #tag in any note)
 
 Tasks:
-Ctrl+Shift+X — turn the line into a task, or toggle open/done
-Ctrl+Shift+O — every task in the vault in one list: Enter opens its source,
+F4 — turn the line into a task, or toggle open/done (or Ctrl+Shift+X)
+Ctrl+M — every task in the vault in one list (or Ctrl+Shift+O): Enter opens its source,
 Space or F2 marks it done without leaving the list
 
 Editing:
@@ -2797,4 +2809,6 @@ Press F1 at any time to show the full shortcut list.
 #welcome
 """;
 }
+
+
 
