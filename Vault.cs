@@ -18,6 +18,8 @@ public class Vault
     public string Root { get; }
     public const string TrashFolderName = "المحذوفات";
     public string TrashPath => Path.Combine(Root, TrashFolderName);
+    public const string TemplatesFolderName = "قوالب";
+    public string TemplatesPath => Path.Combine(Root, TemplatesFolderName);
 
     static readonly Regex LinkRegex = new(@"\[\[([^\]\|#]+)([#|][^\]]*)?\]\]", RegexOptions.Compiled);
     static readonly Regex TagRegex = new(@"(?<=^|[\s(])#([\p{L}\p{N}_\-/]+)", RegexOptions.Compiled);
@@ -388,6 +390,50 @@ public class Vault
         return dest;
     }
 
+    /// <summary>القوالب: ملاحظات في مجلد «قوالب» تُنشأ منها ملاحظات جديدة.</summary>
+    public IEnumerable<string> Templates() =>
+        Directory.Exists(TemplatesPath)
+            ? Directory.EnumerateFiles(TemplatesPath, "*.md")
+                .OrderBy(p => DisplayName(p), StringComparer.CurrentCultureIgnoreCase)
+            : Enumerable.Empty<string>();
+
+    public bool IsTemplate(string path) =>
+        Path.GetFullPath(path).StartsWith(Path.GetFullPath(TemplatesPath) + Path.DirectorySeparatorChar,
+                                          StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>يبحث عن قالب اليوميات بالاسم المتعارف عليه بالعربية أو الإنجليزية.</summary>
+    public string? DailyTemplate() =>
+        Templates().FirstOrDefault(p =>
+            DisplayName(p).Equals("يومية", StringComparison.OrdinalIgnoreCase) ||
+            DisplayName(p).Equals("Daily", StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>علامة داخلية لموضع المؤشر، تُزال من النص بعد تحديد موضعها.</summary>
+    const string CursorMarker = "CURSOR";
+
+    static readonly Regex TemplateVariable = new(@"\{\{\s*([^}\r\n]+?)\s*\}\}", RegexOptions.Compiled);
+
+    /// <summary>
+    /// يملأ متغيّرات القالب: العنوان والتاريخ والوقت، ويحدّد موضع المؤشر إن وُجدت علامته.
+    /// المتغيّرات غير المعروفة تبقى كما هي فلا يضيع نص المستخدم.
+    /// caretOffset يساوي -1 إن لم يحدد القالب موضعاً للمؤشر.
+    /// </summary>
+    public static string ApplyTemplate(string content, string title, DateTime now, string dateText, out int caretOffset)
+    {
+        var text = TemplateVariable.Replace(content, m => m.Groups[1].Value.Trim().ToLowerInvariant() switch
+        {
+            "العنوان" or "title" => title,
+            "التاريخ" or "date" => dateText,
+            "الوقت" or "time" => now.ToString("HH:mm"),
+            "التاريخ_رقمي" or "isodate" => now.ToString("yyyy-MM-dd"),
+            "المؤشر" or "cursor" => CursorMarker,
+            _ => m.Value,
+        });
+
+        caretOffset = text.IndexOf(CursorMarker, StringComparison.Ordinal);
+        if (caretOffset >= 0) text = text.Remove(caretOffset, CursorMarker.Length);
+        return text;
+    }
+
     // صيغة المهام في Markdown: "- [ ] نص" أو "- [x] نص" مع أي مسافة بادئة وأي علامة قائمة
     static readonly Regex TaskLine = new(@"^(\s*)([-*+])\s+\[([ xX])\]\s?(.*)$", RegexOptions.Compiled);
     static readonly Regex BulletLine = new(@"^(\s*)([-*+])\s+(.*)$", RegexOptions.Compiled);
@@ -419,6 +465,8 @@ public class Vault
     {
         var found = new List<TaskItem>();
         foreach (var (p, note) in Indexed())
+        {
+            if (IsTemplate(p)) continue;      // مهام القالب نموذج لا عمل حقيقي
             for (int i = 0; i < note.Lines.Length; i++)
             {
                 var m = TaskLine.Match(note.Lines[i]);
@@ -429,6 +477,7 @@ public class Vault
                 if (text.Length == 0) continue;      // مربّع فارغ بلا نص ليس مهمة
                 found.Add(new TaskItem(p, i, text, done));
             }
+        }
         return found
             .OrderBy(t => DisplayName(t.FilePath), StringComparer.CurrentCultureIgnoreCase)
             .ThenBy(t => t.LineNumber);

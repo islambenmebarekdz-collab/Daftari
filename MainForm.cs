@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
 using System.Security.Cryptography;
@@ -251,6 +251,8 @@ public class MainForm : AppForm
     {
         var file = new ToolStripMenuItem(L.T("&ملف", "&File"));
         file.DropDownItems.Add(MI(L.T("ملاحظة جديدة...", "New note..."), Keys.Control | Keys.N, (_, _) => NewNote()));
+        // مفتاح وظيفي: توليفات Ctrl+Shift قد تعترضها خدمات تبديل لغة الإدخال فلا تصل للتطبيق
+        file.DropDownItems.Add(MI(L.T("ملاحظة من قالب...", "New note from template..."), Keys.F7, (_, _) => NewNoteFromTemplate()));
         file.DropDownItems.Add(MI(L.T("مجلد جديد...", "New folder..."), Keys.Control | Keys.Shift | Keys.N, (_, _) => NewFolder()));
         file.DropDownItems.Add(MI(L.T("إعادة تسمية...", "Rename..."), Keys.F2, (_, _) => RenameSelected()));
         file.DropDownItems.Add(MI(L.T("نقل إلى...", "Move to..."), Keys.Control | Keys.Shift | Keys.M, (_, _) => MoveSelected()));
@@ -259,7 +261,8 @@ public class MainForm : AppForm
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(MI(L.T("قفل الملاحظة بكلمة مرور...", "Lock note with a password..."), Keys.None, (_, _) => LockSelectedNote()));
         file.DropDownItems.Add(MI(L.T("إزالة القفل عن الملاحظة...", "Remove the note's lock..."), Keys.None, (_, _) => UnlockSelectedNote()));
-        file.DropDownItems.Add(MI(L.T("إقفال كل الملاحظات المفتوحة", "Lock all unlocked notes"), Keys.Control | Keys.Shift | Keys.L, (_, _) => LockAllSessions()));
+        // Ctrl+Shift+L محجوز عالمياً لبرنامج آخر على بعض الأجهزة، فاستُبدل بمفتاح وظيفي
+        file.DropDownItems.Add(MI(L.T("إقفال كل الملاحظات المفتوحة", "Lock all unlocked notes"), Keys.F8, (_, _) => LockAllSessions()));
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(MI(L.T("حفظ", "Save"), Keys.Control | Keys.S, (_, _) => { SaveCurrent(announce: true); SyncTitleToFileName(true); }));
         file.DropDownItems.Add(MI(L.T("تحديث الشجرة", "Refresh tree"), Keys.F5, (_, _) => { LoadTree(); Announce(L.T("تم تحديث شجرة الملاحظات", "Notes tree refreshed")); }));
@@ -854,6 +857,70 @@ public class MainForm : AppForm
         editor.SelectionStart = editor.TextLength;
         LoadTree();
         FocusEditorFresh(L.T($"أُنشئت الملاحظة {vault.DisplayName(path)}", $"Created note {vault.DisplayName(path)}"));
+    }
+
+    /// <summary>
+    /// ينشئ ملاحظة من قالب مختار، بعد ملء متغيّراته ووضع المؤشر حيث حدّده القالب.
+    /// </summary>
+    void NewNoteFromTemplate()
+    {
+        var templates = vault.Templates().ToList();
+        if (templates.Count == 0)
+        {
+            var create = MessageBox.Show(this,
+                L.T($"لا توجد قوالب بعد. هل تنشئ مجلد «{Vault.TemplatesFolderName}» مع قالب نموذجي تعدّله كما تشاء؟",
+                    $"No templates yet. Create the \"{Vault.TemplatesFolderName}\" folder with a sample template you can edit?"),
+                L.T("قوالب", "Templates"), MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+                MessageBoxDefaultButton.Button1, L.MsgOptions);
+            if (create != DialogResult.Yes) return;
+            try
+            {
+                Directory.CreateDirectory(vault.TemplatesPath);
+                var sample = vault.CreateNote(vault.TemplatesPath, L.T("ملاحظة عامة", "General note"), SampleTemplate);
+                LoadTree();
+                OpenNote(sample, announceOpen: false);
+                FocusEditorFresh(L.T("أُنشئ قالب نموذجي، عدّله ثم أنشئ منه ملاحظاتك",
+                                     "A sample template was created; edit it, then create notes from it"));
+            }
+            catch (Exception ex) { Msg(L.T("تعذّر إنشاء القالب: ", "Could not create the template: ") + ex.Message); }
+            return;
+        }
+
+        using var picker = new ListPickForm(L.T("ملاحظة من قالب", "New note from template"),
+                                            L.T("اختر القالب", "Choose a template"));
+        foreach (var tpl in templates) picker.AddItem(vault.DisplayName(tpl), tpl);
+        if (picker.ShowDialog(this) != DialogResult.OK || picker.Result is not string template) return;
+
+        var name = InputBox.Show(this, L.T("ملاحظة من قالب", "New note from template"),
+                                 L.T("اسم الملاحظة الجديدة:", "Name of the new note:"));
+        if (name == null) return;
+
+        CreateNoteFromTemplate(template, name, TargetFolder());
+    }
+
+    /// <summary>ينشئ ملاحظة بمحتوى قالب بعد ملء متغيّراته، ويفتحها عند موضع المؤشر المحدّد.</summary>
+    void CreateNoteFromTemplate(string templatePath, string noteName, string folder)
+    {
+        string raw;
+        try { raw = File.ReadAllText(templatePath); }
+        catch (Exception ex) { Msg(L.T("تعذّر قراءة القالب: ", "Could not read the template: ") + ex.Message); return; }
+
+        var now = DateTime.Now;
+        var content = Vault.ApplyTemplate(raw, noteName, now,
+                                          Settings.FormatTimestamp(settings.DateFormat, now), out int caret);
+        content = content.Replace("\r\n", "\n").Replace("\n", "\r\n");
+
+        string path;
+        try { path = vault.CreateNote(folder, noteName, content); }
+        catch (Exception ex) { Msg(L.T("تعذّر إنشاء الملاحظة: ", "Could not create the note: ") + ex.Message); return; }
+
+        OpenNote(path, announceOpen: false);
+        LoadTree();
+        if (caret >= 0) editor.Select(Math.Min(caret, editor.TextLength), 0);
+        else editor.Select(editor.TextLength, 0);
+        editor.ScrollToCaret();
+        FocusEditorFresh(L.T($"أُنشئت {vault.DisplayName(path)} من قالب {vault.DisplayName(templatePath)}",
+                             $"Created {vault.DisplayName(path)} from template {vault.DisplayName(templatePath)}"));
     }
 
     void NewFolder()
@@ -1671,7 +1738,23 @@ public class MainForm : AppForm
         var path = Path.Combine(folder, name + ".md");
         bool created = !File.Exists(path);
         if (created)
-            File.WriteAllText(path, $"# {name}\r\n\r\n", new UTF8Encoding(false));
+        {
+            // قالب اليوميات إن وُجد (قوالب/يومية)، وإلا عنوان بسيط بالتاريخ
+            var template = vault.DailyTemplate();
+            string content = $"# {name}\r\n\r\n";
+            if (template != null)
+            {
+                try
+                {
+                    var now = DateTime.Now;
+                    content = Vault.ApplyTemplate(File.ReadAllText(template), name, now,
+                                                  Settings.FormatTimestamp(settings.DateFormat, now), out _)
+                                   .Replace("\r\n", "\n").Replace("\n", "\r\n");
+                }
+                catch { }
+            }
+            File.WriteAllText(path, content, new UTF8Encoding(false));
+        }
         OpenNote(path);
         editor.SelectionStart = editor.TextLength;
         editor.Focus();
@@ -2386,12 +2469,71 @@ public class MainForm : AppForm
     static string HelpText => L.En ? HelpTextEn : HelpTextAr;
     static string WelcomeText => L.En ? WelcomeTextEn : WelcomeTextAr;
 
+    static string SampleTemplate => L.En ? SampleTemplateEn : SampleTemplateAr;
+
+    const string SampleTemplateAr =
+"""
+# {{العنوان}}
+
+التاريخ: {{التاريخ}}
+
+## الفكرة الرئيسية
+
+{{المؤشر}}
+
+## التفاصيل
+
+## الخطوات التالية
+
+- [ ]
+
+<!--
+متغيّرات القالب المتاحة:
+{{العنوان}} اسم الملاحظة الجديدة
+{{التاريخ}} التاريخ والوقت بالتنسيق المختار في الإعدادات
+{{الوقت}} الساعة والدقيقة
+{{التاريخ_رقمي}} التاريخ بصيغة سنة-شهر-يوم
+{{المؤشر}} موضع مؤشر الكتابة بعد إنشاء الملاحظة
+سمِّ قالباً باسم «يومية» ليُستعمل تلقائياً مع ملاحظة اليوم.
+-->
+""";
+
+    const string SampleTemplateEn =
+"""
+# {{title}}
+
+Date: {{date}}
+
+## Main idea
+
+{{cursor}}
+
+## Details
+
+## Next steps
+
+- [ ]
+
+<!--
+Available template variables:
+{{title}} the new note's name
+{{date}} date and time in the format chosen in Settings
+{{time}} hours and minutes
+{{isodate}} date as year-month-day
+{{cursor}} where the caret lands after the note is created
+Name a template "Daily" to have it used automatically for today's note.
+-->
+""";
+
     const string HelpTextAr =
 """
 اختصارات دفتري
 
 الملفات:
 Ctrl+N — ملاحظة جديدة
+F7 — ملاحظة من قالب (قوالبك ملاحظات في مجلد «قوالب»،
+وتدعم متغيّرات مثل {{العنوان}} و{{التاريخ}} و{{المؤشر}}،
+وقالب باسم «يومية» يُستعمل تلقائياً مع ملاحظة اليوم Ctrl+D)
 Ctrl+Shift+N — مجلد جديد
 F2 — إعادة تسمية العنصر المحدد
 Ctrl+Shift+M — نقل الملاحظة أو المجلد إلى مجلد آخر (شجرة مجلدات)
@@ -2410,7 +2552,7 @@ Ctrl+, — الإعدادات (اللغة، تنسيق التاريخ، مجلد
 التنقل بالأسهم في الشجرة لا يفتح الملاحظة المقفلة ولا يطلب كلمة المرور،
 فاضغط Enter عليها لفتحها. وبعد فتحها مرة تبقى مفتوحة حتى إقفال الجلسة.
 "قفل الملاحظة بكلمة مرور" يشفّرها بمعيار AES-256-GCM ويحذف الأصل الواضح،
-و"إزالة القفل" تعيدها ملاحظة عادية، وCtrl+Shift+L يُقفل كل ما فتحته في الجلسة.
+و"إزالة القفل" تعيدها ملاحظة عادية، وF8 يُقفل كل ما فتحته في الجلسة.
 تنبيهات: نسيان كلمة المرور يعني ضياع الملاحظة بلا استرجاع، واسم الملف يبقى
 ظاهراً، والملاحظات المقفلة خارج البحث والمعاينة ما لم تفتحها.
 مفتاح قائمة السياق (أو Shift+F10) على أي عنصر في الشجرة —
@@ -2494,6 +2636,9 @@ Daftari shortcuts
 
 Files:
 Ctrl+N — new note
+F7 — new note from a template (templates are notes in the
+"قوالب" folder and support variables such as {{title}}, {{date}} and
+{{cursor}}; a template named "Daily" is used automatically for Ctrl+D)
 Ctrl+Shift+N — new folder
 F2 — rename selected item
 Ctrl+Shift+M — move the note or folder to another folder (folder tree)
@@ -2512,8 +2657,7 @@ Locking sensitive notes (File menu or the context menu):
 Arrowing through the tree never opens a locked note or asks for its password;
 press Enter on it to open it. Once opened it stays open until the session locks.
 "Lock note with a password" encrypts it with AES-256-GCM and deletes the
-plain original; "Remove the note's lock" restores a normal note; Ctrl+Shift+L
-locks everything unlocked this session.
+plain original; "Remove the note's lock" restores a normal note; F8 locks everything unlocked this session.
 Notes: forgetting the password means the note is unrecoverable, the file name
 stays visible, and locked notes stay out of search and preview until opened.
 Applications key (or Shift+F10) on any tree item —
@@ -2653,3 +2797,4 @@ Press F1 at any time to show the full shortcut list.
 #welcome
 """;
 }
+
