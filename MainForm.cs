@@ -79,7 +79,7 @@ public class MainForm : AppForm
             }
         };
 
-        FormClosing += (_, _) => { SaveCurrent(); settings.Save(); };
+        FormClosing += (_, _) => { SaveCurrent(); settings.Save(); BackupOnExit(); };
     }
 
     // ---------- بناء الواجهة ----------
@@ -270,6 +270,7 @@ public class MainForm : AppForm
         nav.DropDownItems.Add(MI(L.T("أين أنا؟", "Where am I?"), Keys.Control | Keys.I, (_, _) => AnnounceWhereAmI()));
         nav.DropDownItems.Add(MI(L.T("اتباع الرابط عند المؤشر", "Follow link at caret"), Keys.Control | Keys.Enter, (_, _) => FollowLink()));
         nav.DropDownItems.Add(MI(L.T("الروابط الواردة...", "Backlinks..."), Keys.Control | Keys.B, (_, _) => ShowBacklinks()));
+        nav.DropDownItems.Add(MI(L.T("الروابط الصادرة...", "Outgoing links..."), Keys.Control | Keys.L, (_, _) => ShowOutgoingLinks()));
         nav.DropDownItems.Add(MI(L.T("عناوين الملاحظة...", "Note headings..."), Keys.Control | Keys.J, (_, _) => ShowHeadings()));
         nav.DropDownItems.Add(MI(L.T("الوسوم...", "Tags..."), Keys.Control | Keys.T, (_, _) => ShowTags()));
         nav.DropDownItems.Add(MI(L.T("ملاحظة اليوم", "Today's note"), Keys.Control | Keys.D, (_, _) => OpenDailyNote()));
@@ -939,6 +940,58 @@ public class MainForm : AppForm
         }
     }
 
+    /// <summary>كل روابط [[...]] داخل الملاحظة الحالية، قابلة للفتح المباشر أو القفز إلى موضعها.</summary>
+    void ShowOutgoingLinks()
+    {
+        if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
+        SaveCurrent();
+        var links = vault.OutgoingLinks(currentNote).ToList();
+        if (links.Count == 0)
+        {
+            Announce(L.T("لا توجد روابط صادرة من هذه الملاحظة", "This note has no outgoing links"));
+            return;
+        }
+        using var dlg = new ListPickForm(
+            L.T($"الروابط الصادرة من {vault.DisplayName(currentNote)} ({links.Count})",
+                $"Outgoing links from {vault.DisplayName(currentNote)} ({links.Count})"),
+            L.T("قائمة الروابط الصادرة", "Outgoing links list"));
+        foreach (var (target, line, path) in links)
+            dlg.AddItem(path != null
+                ? L.T($"{target} — السطر {line + 1}", $"{target} — line {line + 1}")
+                : L.T($"{target} — السطر {line + 1} — ملاحظة غير موجودة",
+                      $"{target} — line {line + 1} — note does not exist"),
+                (target, line, path));
+
+        if (dlg.ShowDialog(this) != DialogResult.OK ||
+            dlg.Result is not ValueTuple<string, int, string?> chosen) return;
+        var (chosenTarget, chosenLine, chosenPath) = chosen;
+
+        if (chosenPath != null)
+        {
+            OpenNote(chosenPath);
+            FocusEditorFresh();
+            return;
+        }
+        // الهدف غير موجود: نعرض إنشاءه، وإلا نكتفي بالقفز إلى موضع الرابط في الملاحظة الحالية
+        var answer = MessageBox.Show(this,
+            L.T($"الملاحظة \"{chosenTarget}\" غير موجودة. هل تريد إنشاءها؟",
+                $"The note \"{chosenTarget}\" does not exist. Create it?"),
+            L.T("إنشاء ملاحظة", "Create note"), MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button1, L.MsgOptions);
+        if (answer == DialogResult.Yes)
+        {
+            var created = vault.CreateNote(vault.Root, chosenTarget, $"# {chosenTarget}\r\n\r\n");
+            OpenNote(created);
+            LoadTree();
+        }
+        else
+        {
+            editor.Select(LineStartIndex(editor.Text, chosenLine), 0);
+            editor.ScrollToCaret();
+        }
+        FocusEditorFresh();
+    }
+
     // ---------- التنقل داخل الملاحظة ----------
 
     /// <summary>فهرس أول حرف في السطر المنطقي المعطى، بمعزل عن الالتفاف البصري للأسطر الطويلة.</summary>
@@ -1576,14 +1629,61 @@ public class MainForm : AppForm
         }
         try
         {
-            Directory.CreateDirectory(settings.BackupFolder!);
-            var name = $"Daftari-{Path.GetFileName(vault.Root)}-{DateTime.Now:yyyy-MM-dd-HHmm}.zip";
-            var dest = Path.Combine(settings.BackupFolder!, name);
-            if (File.Exists(dest)) File.Delete(dest);
-            ZipFile.CreateFromDirectory(vault.Root, dest, CompressionLevel.Optimal, includeBaseDirectory: false);
+            var name = CreateBackupZip();
             Announce(L.T($"تم إنشاء النسخة الاحتياطية: {name}", $"Backup created: {name}"));
         }
         catch (Exception ex) { Msg(L.T("تعذر إنشاء النسخة الاحتياطية: ", "Could not create the backup: ") + ex.Message); }
+    }
+
+    /// <summary>
+    /// ينشئ نسخة zip من القبو في مجلد النسخ ويحذف الأقدم مبقياً آخر N نسخ.
+    /// يعيد اسم الملف المنشأ. يفترض أن مجلد النسخ مضبوط وصالح.
+    /// </summary>
+    string CreateBackupZip()
+    {
+        Directory.CreateDirectory(settings.BackupFolder!);
+        var vaultName = Path.GetFileName(vault.Root);
+        var name = $"Daftari-{vaultName}-{DateTime.Now:yyyy-MM-dd-HHmmss}.zip";
+        var dest = Path.Combine(settings.BackupFolder!, name);
+        if (File.Exists(dest)) File.Delete(dest);
+        ZipFile.CreateFromDirectory(vault.Root, dest, CompressionLevel.Optimal, includeBaseDirectory: false);
+        PruneOldBackups(vaultName);
+        return name;
+    }
+
+    /// <summary>يبقي أحدث settings.BackupKeep نسخة لهذا القبو ويحذف ما قبلها كي لا يمتلئ القرص.</summary>
+    void PruneOldBackups(string vaultName)
+    {
+        try
+        {
+            int keep = Math.Max(1, settings.BackupKeep);
+            var old = new DirectoryInfo(settings.BackupFolder!)
+                .GetFiles($"Daftari-{vaultName}-*.zip")
+                .OrderByDescending(f => f.LastWriteTimeUtc)
+                .Skip(keep);
+            foreach (var f in old)
+                try { f.Delete(); } catch { }
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// نسخة احتياطية صامتة عند إغلاق التطبيق (إن كان مجلد النسخ مضبوطاً وصالحاً).
+    /// لا تُظهر أي رسالة كي لا تعطّل الإغلاق؛ الأخطاء تُبتلع عمداً.
+    /// </summary>
+    void BackupOnExit()
+    {
+        if (!settings.AutoBackupOnExit || string.IsNullOrWhiteSpace(settings.BackupFolder)) return;
+        try
+        {
+            var backupFull = Path.GetFullPath(settings.BackupFolder!);
+            var vaultFull = Path.GetFullPath(vault.Root);
+            if (string.Equals(backupFull, vaultFull, StringComparison.OrdinalIgnoreCase) ||
+                backupFull.StartsWith(vaultFull + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                return; // مجلد نسخ داخل القبو: نتجاهل بصمت بدل تعطيل الإغلاق
+            CreateBackupZip();
+        }
+        catch { }
     }
 
     void OpenSettings()
@@ -1731,6 +1831,8 @@ Ctrl+S — حفظ (الحفظ يتم تلقائياً أيضاً)
 F5 — تحديث شجرة الملاحظات
 Ctrl+O — فتح قبو آخر
 Ctrl+Shift+B — نسخة احتياطية الآن
+(وهناك نسخة تلقائية عند إغلاق التطبيق، تُضبط من الإعدادات
+مع عدد النسخ المحفوظة ويُحذف الأقدم تلقائياً)
 Ctrl+, — الإعدادات (اللغة، تنسيق التاريخ، مجلد النسخ الاحتياطي)
 مفتاح قائمة السياق (أو Shift+F10) على أي عنصر في الشجرة —
 قائمة إجراءات تتكيّف: فتح كـ HTML، تسمية، نقل، مشاركة مجلد كـ zip، حذف
@@ -1759,7 +1861,10 @@ Ctrl+D — ملاحظة اليوم (تُنشأ في مجلد اليوميات)
 اكتب [[اسم الملاحظة]] لإنشاء رابط.
 Ctrl+Enter — اتباع الرابط عند مؤشر الكتابة
 Ctrl+K — إدراج رابط عبر البحث عن ملاحظة
-Ctrl+B — عرض الروابط الواردة إلى الملاحظة الحالية
+Ctrl+B — الروابط الواردة إلى الملاحظة الحالية، ومعها قسم
+"إشارات غير مرتبطة" لملاحظات تذكر اسمها كنص عادٍ،
+واضغط F2 على أي إشارة لتحويلها إلى رابط
+Ctrl+L — الروابط الصادرة من الملاحظة الحالية (فتح مباشر)
 
 البحث:
 Ctrl+F — بحث داخل الملاحظة، ثم F3 للتالي
@@ -1811,6 +1916,8 @@ Ctrl+S — save (autosave also runs)
 F5 — refresh the notes tree
 Ctrl+O — open another vault
 Ctrl+Shift+B — back up now
+(an automatic backup also runs when the app closes; configure it and
+how many backups to keep in Settings — the oldest are deleted)
 Ctrl+, — settings (language, date format, backup folder)
 Applications key (or Shift+F10) on any tree item —
 an actions menu that adapts: open as HTML, rename, move, share folder as zip, delete
@@ -1839,7 +1946,10 @@ Links:
 Write [[note name]] to create a link.
 Ctrl+Enter — follow the link at the caret
 Ctrl+K — insert a link by searching for a note
-Ctrl+B — show backlinks to the current note
+Ctrl+B — backlinks to the current note, plus an "unlinked mentions"
+section for notes that mention its name as plain text;
+press F2 on a mention to convert it into a link
+Ctrl+L — outgoing links from the current note (opens directly)
 
 Search:
 Ctrl+F — find in note, then F3 for next

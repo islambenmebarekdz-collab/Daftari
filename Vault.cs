@@ -224,6 +224,26 @@ public class Vault
 
     static readonly Regex AnyWikiLink = new(@"\[\[[^\]]*\]\]", RegexOptions.Compiled);
 
+    /// <summary>
+    /// الروابط الصادرة من ملاحظة: كل [[هدف]] بترتيب ظهوره، مع رقم سطره ومسار الملاحظة الهدف
+    /// (null إن كانت غير موجودة بعد). تُعرض للتنقل والفتح المباشر.
+    /// </summary>
+    public IEnumerable<(string Target, int LineNumber, string? Path)> OutgoingLinks(string notePath)
+    {
+        string[] lines;
+        try { lines = File.ReadAllText(notePath).Replace("\r\n", "\n").Split('\n'); }
+        catch { yield break; }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        for (int i = 0; i < lines.Length; i++)
+            foreach (Match m in LinkRegex.Matches(lines[i]))
+            {
+                var target = m.Groups[1].Value.Trim();
+                if (target.Length == 0 || !seen.Add(target)) continue;
+                yield return (target, i, ResolveLink(target));
+            }
+    }
+
     static Regex StandaloneName(string name) =>
         new(@"(?<![\p{L}\p{N}_])" + Regex.Escape(name) + @"(?![\p{L}\p{N}_])", RegexOptions.IgnoreCase);
 

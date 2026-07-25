@@ -621,6 +621,8 @@ public class SettingsForm : AppForm
     readonly ComboBox language = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     readonly ComboBox dateFormat = new() { DropDownStyle = ComboBoxStyle.DropDownList };
     readonly TextBox backupPath = new();
+    readonly CheckBox autoBackup = new();
+    readonly NumericUpDown backupKeep = new();
 
     public bool LanguageChanged { get; private set; }
 
@@ -635,7 +637,7 @@ public class SettingsForm : AppForm
         MaximizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(560, 360);
+        ClientSize = new Size(560, 470);
 
         int y = 16;
         void AddLabel(string text)
@@ -693,7 +695,24 @@ public class SettingsForm : AppForm
                        "Tip: choose a folder inside Google Drive or OneDrive to sync backups to the cloud automatically."),
             Left = 16, Top = y, Width = 528, Height = 40
         });
-        y += 52;
+        y += 44;
+
+        autoBackup.Text = L.T("نسخة احتياطية تلقائية عند إغلاق التطبيق", "Back up automatically when the app closes");
+        autoBackup.SetBounds(16, y, 460, 28);
+        autoBackup.AccessibleName = autoBackup.Text;
+        autoBackup.Checked = settings.AutoBackupOnExit;
+        Controls.Add(autoBackup);
+        y += 34;
+
+        var keepLbl = new Label { Text = L.T("عدد النسخ المحفوظة (يُحذف الأقدم):", "Backups to keep (oldest deleted):"), Left = 16, Top = y + 4, Width = 300 };
+        backupKeep.SetBounds(320, y, 90, 30);
+        backupKeep.AccessibleName = L.T("عدد النسخ المحفوظة", "Backups to keep");
+        backupKeep.Minimum = 1;
+        backupKeep.Maximum = 100;
+        backupKeep.Value = Math.Clamp(settings.BackupKeep, 1, 100);
+        Controls.Add(keepLbl);
+        Controls.Add(backupKeep);
+        y += 44;
 
         var ok = new Button { Text = L.T("حفظ", "Save"), DialogResult = DialogResult.OK, Width = 110 };
         ok.SetBounds(16, y, 110, 34);
@@ -714,6 +733,8 @@ public class SettingsForm : AppForm
         settings.Language = newLang;
         settings.DateFormat = DateFormatKeys[Math.Max(0, dateFormat.SelectedIndex)];
         settings.BackupFolder = backupPath.Text.Trim().Length > 0 ? backupPath.Text.Trim() : null;
+        settings.AutoBackupOnExit = autoBackup.Checked;
+        settings.BackupKeep = (int)backupKeep.Value;
         settings.Save();
     }
 }

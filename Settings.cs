@@ -22,6 +22,10 @@ public class Settings
     /// <summary>"arabic" أو "algerian" أو "english" أو "numeric"</summary>
     public string DateFormat { get; set; } = "arabic";
     public string? BackupFolder { get; set; }
+    /// <summary>نسخة احتياطية تلقائية عند إغلاق التطبيق (تتطلب ضبط BackupFolder).</summary>
+    public bool AutoBackupOnExit { get; set; } = true;
+    /// <summary>عدد النسخ الاحتياطية المحفوظة لكل قبو؛ يُحذف الأقدم تلقائياً.</summary>
+    public int BackupKeep { get; set; } = 10;
 
     static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Daftari");
