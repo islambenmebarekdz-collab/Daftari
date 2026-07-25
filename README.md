@@ -1,5 +1,7 @@
 # دفتري — Daftari
 
+[![Build and test](https://github.com/islambenmebarekdz-collab/Daftari/actions/workflows/ci.yml/badge.svg)](https://github.com/islambenmebarekdz-collab/Daftari/actions/workflows/ci.yml)
+
 **تطبيق ملاحظات عربي مصمم من الأساس لقارئ الشاشة NVDA** — بمفهوم Obsidian: ملاحظاتك ملفات Markdown عادية في مجلد تملكه أنت، مترابطة بروابط ويكي ووسوم وبحث شامل.
 
 *An Arabic-first, NVDA-screen-reader-native note-taking app for Windows. Obsidian-style: your notes are plain Markdown files you own, connected with wiki links, tags, and full-text search. English UI available in Settings.*
@@ -40,15 +42,31 @@
 
 ## البناء من المصدر
 
-```
-dotnet build -c Release
-```
-
-يتطلب .NET 8 SDK. وللنشر كملف واحد مستقل:
+يتطلب .NET 8 SDK على ويندوز.
 
 ```
-dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+dotnet build Daftari.sln -c Release
+dotnet test Daftari.sln -c Release
 ```
+
+### النشر
+
+سكربت واحد يبني ويشغّل كل الاختبارات — **ويتوقف إن فشل أي اختبار** — ثم ينشر النسخة المستقلة ويجهّز الحزمة:
+
+```
+.\scripts\release.ps1 -Zip
+```
+
+## الاختبارات والجودة
+
+- حزمة اختبارات (xunit) في `tests/Daftari.Tests` تغطي منطق القبو: النقل وسلة المحذوفات وتعارض الأسماء، وترجيح البحث والبحث بعدة كلمات، والروابط والإشارات غير المرتبطة، والاستبدال، وضمانات التشفير (كشف العبث، عدم تكرار الناتج، رفض كلمة المرور الخاطئة).
+- **فحص آلي على GitHub Actions** مع كل دفعة: بناء، اختبارات، والتأكد من أن النسخة المستقلة ما زالت تُبنى.
+- قاعدة المشروع: المنطق في `Vault.cs` و`NoteCrypto.cs` قابلاً للاختبار، والواجهة في `MainForm.cs` رقيقة. أي منطق جديد يأتي بفحوصه.
+- قاعدة البيانات: كل عملية تحذف أو تكتب فوق شيء **تتحقق أولاً** (القفل يفكّ التشفير قبل حذف الأصل، والحفظ يفحص تعديلات القرص، والحذف إلى سلة قابلة للاسترجاع).
+
+## ما ليس دفتري
+
+حدود مقصودة تحمي بساطته ووضوحه لقارئ الشاشة: لا رسم بياني للروابط، ولا مرفقات وصور، ولا مزامنة سحابية خاصة (استعمل مجلداً داخل OneDrive أو Google Drive)، ولا محرر منسّق — النص Markdown خام يقرؤه أي برنامج.
 
 ## التقنية
 

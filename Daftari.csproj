@@ -17,4 +17,10 @@
     <PackageReference Include="Markdig" Version="1.3.2" />
   </ItemGroup>
 
+  <!-- مشروع الاختبارات ومخرجات النشر خارج تجميع التطبيق -->
+  <ItemGroup>
+    <Compile Remove="tests/**" />
+    <Compile Remove="dist/**" />
+  </ItemGroup>
+
 </Project>
