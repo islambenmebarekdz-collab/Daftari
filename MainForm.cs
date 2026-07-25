@@ -570,10 +570,11 @@ public class MainForm : AppForm
     void Tree_AfterSelect(object? sender, TreeViewEventArgs e)
     {
         // الفتح من الشجرة صامت: NVDA يعلن عقدة الشجرة بنفسه،
-        // وإعلاننا "فُتحت الملاحظة" كان يقاطعه فتبدو الأسهم معطلة
+        // وإعلاننا "فُتحت الملاحظة" كان يقاطعه فتبدو الأسهم معطلة.
+        // والمقفلة لا تُفتح بمجرد المرور عليها كي لا تعترض نافذة كلمة المرور التنقل.
         if (e.Node?.Tag is string path && File.Exists(path) &&
             !string.Equals(path, currentNote, StringComparison.OrdinalIgnoreCase))
-            OpenNote(path, announceOpen: false);
+            OpenNote(path, announceOpen: false, promptForPassword: false);
     }
 
     void Tree_KeyDown(object? sender, KeyEventArgs e)
@@ -581,7 +582,14 @@ public class MainForm : AppForm
         if (e.KeyCode == Keys.Delete) { DeleteSelected(); e.SuppressKeyPress = true; }
         else if (e.KeyCode == Keys.Enter)
         {
-            if (tree.SelectedNode?.Tag is string p && File.Exists(p)) editor.Focus();
+            if (tree.SelectedNode?.Tag is string p && File.Exists(p))
+            {
+                // Enter طلب صريح للفتح: هنا فقط تُطلب كلمة مرور الملاحظة المقفلة
+                if (!string.Equals(p, currentNote, StringComparison.OrdinalIgnoreCase))
+                    OpenNote(p);
+                if (string.Equals(p, currentNote, StringComparison.OrdinalIgnoreCase))
+                    editor.Focus();
+            }
             e.SuppressKeyPress = true;
         }
     }
@@ -614,7 +622,11 @@ public class MainForm : AppForm
     /// يقرأ نص ملاحظة، ويطلب كلمة المرور إن كانت مقفلة ولم يُفتح مفتاحها في هذه الجلسة.
     /// يعيد false إن ألغى المستخدم أو فشل فك التشفير، فلا تتغيّر حالة المحرر.
     /// </summary>
-    bool TryReadNote(string path, out string text)
+    /// <param name="allowPrompt">
+    /// false عند المرور بالملاحظة في الشجرة بالأسهم: لا تُفتح نافذة كلمة المرور
+    /// كي يبقى التنقل حراً، وتُفتح المقفلة بضغط Enter صراحةً.
+    /// </param>
+    bool TryReadNote(string path, out string text, bool allowPrompt = true)
     {
         text = "";
         if (!NoteCrypto.IsEncrypted(path))
@@ -632,6 +644,8 @@ public class MainForm : AppForm
             try { text = NoteCrypto.Decrypt(data, known); return true; }
             catch { sessionKeys.Remove(path); }   // مفتاح لم يعد صالحاً (تغيّر الملف مثلاً)
         }
+
+        if (!allowPrompt) return false;   // مرور عابر في الشجرة: لا نقاطع المستخدم بطلب كلمة مرور
 
         var password = InputBox.Show(this,
             L.T($"ملاحظة مقفلة: {vault.DisplayName(path)}", $"Locked note: {vault.DisplayName(path)}"),
@@ -658,11 +672,11 @@ public class MainForm : AppForm
         }
     }
 
-    void OpenNote(string path, int line = -1, bool announceOpen = true)
+    void OpenNote(string path, int line = -1, bool announceOpen = true, bool promptForPassword = true)
     {
         SaveCurrent();
         if (!File.Exists(path)) { Announce(L.T("الملف غير موجود", "File not found")); return; }
-        if (!TryReadNote(path, out string text)) return;
+        if (!TryReadNote(path, out string text, promptForPassword)) return;
 
         loading = true;
         editor.Text = text.Replace("\r\n", "\n").Replace("\n", "\r\n");
@@ -2345,6 +2359,8 @@ Ctrl+Shift+B — نسخة احتياطية الآن
 Ctrl+, — الإعدادات (اللغة، تنسيق التاريخ، مجلد النسخ الاحتياطي)
 
 قفل الملاحظات الحساسة (قائمة ملف أو قائمة السياق):
+التنقل بالأسهم في الشجرة لا يفتح الملاحظة المقفلة ولا يطلب كلمة المرور،
+فاضغط Enter عليها لفتحها. وبعد فتحها مرة تبقى مفتوحة حتى إقفال الجلسة.
 "قفل الملاحظة بكلمة مرور" يشفّرها بمعيار AES-256-GCM ويحذف الأصل الواضح،
 و"إزالة القفل" تعيدها ملاحظة عادية، وCtrl+Shift+L يُقفل كل ما فتحته في الجلسة.
 تنبيهات: نسيان كلمة المرور يعني ضياع الملاحظة بلا استرجاع، واسم الملف يبقى
@@ -2440,6 +2456,8 @@ how many backups to keep in Settings — the oldest are deleted)
 Ctrl+, — settings (language, date format, backup folder)
 
 Locking sensitive notes (File menu or the context menu):
+Arrowing through the tree never opens a locked note or asks for its password;
+press Enter on it to open it. Once opened it stays open until the session locks.
 "Lock note with a password" encrypts it with AES-256-GCM and deletes the
 plain original; "Remove the note's lock" restores a normal note; Ctrl+Shift+L
 locks everything unlocked this session.
