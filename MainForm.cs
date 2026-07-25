@@ -149,6 +149,16 @@ public class MainForm : AppForm
         };
         // مغادرة المحرر لحظة مناسبة لمزامنة اسم الملف مع العنوان (لا أثناء الكتابة)
         editor.Leave += (_, _) => SyncTitleToFileName(false);
+        // كتابة القوس المربع الثاني تفتح منتقي الملاحظات لإكمال الرابط.
+        // نلتقطها في KeyPress (لا TextChanged) كي لا تنطلق عند اللصق أو التحميل،
+        // ونؤجل بالطابور حتى يُدرج القوس فعلاً في النص.
+        editor.KeyPress += (_, e) =>
+        {
+            if (e.KeyChar != '[' || !settings.LinkAutocomplete) return;
+            int caret = editor.SelectionStart;
+            if (caret >= 1 && caret <= editor.TextLength && editor.Text[caret - 1] == '[')
+                BeginInvoke(CompleteWikiLink);
+        };
         editor.KeyDown += (_, e) =>
         {
             if (e.Control && e.KeyCode == Keys.A)
@@ -255,6 +265,7 @@ public class MainForm : AppForm
         edit.DropDownItems.Add(new ToolStripSeparator());
         edit.DropDownItems.Add(MI(L.T("بحث في الملاحظة...", "Find in note..."), Keys.Control | Keys.F, (_, _) => FindInNote()));
         edit.DropDownItems.Add(MI(L.T("العثور على التالي", "Find next"), Keys.F3, (_, _) => FindNext()));
+        edit.DropDownItems.Add(MI(L.T("بحث واستبدال...", "Find and replace..."), Keys.Control | Keys.H, (_, _) => ReplaceInNote()));
         edit.DropDownItems.Add(new ToolStripSeparator());
         edit.DropDownItems.Add(MI(L.T("إدراج رابط لملاحظة...", "Insert link to a note..."), Keys.Control | Keys.K, (_, _) => InsertLink()));
         edit.DropDownItems.Add(MI(L.T("إدراج كتلة كود...", "Insert code block..."), Keys.Control | Keys.Shift | Keys.K, (_, _) => InsertCodeBlock()));
@@ -1064,6 +1075,38 @@ public class MainForm : AppForm
         FocusEditorFresh();
     }
 
+    /// <summary>
+    /// يُستدعى بعد كتابة [[ فيفتح منتقي الملاحظات، ويكمل الرابط باسم المختار مع القوسين الختاميين.
+    /// الإلغاء يترك ما كُتب كما هو دون تدخّل.
+    /// </summary>
+    void CompleteWikiLink()
+    {
+        if (currentNote == null) return;
+        int caret = editor.SelectionStart;
+        // تأكيد أن ما قبل المؤشر قوسان فعلاً (قد يكون النص تغيّر قبل تنفيذ الطابور)
+        if (caret < 2 || editor.Text[caret - 1] != '[' || editor.Text[caret - 2] != '[') return;
+
+        var items = vault.AllNotes()
+            .Where(p => !string.Equals(p, currentNote, StringComparison.OrdinalIgnoreCase))
+            .Select(p => (vault.DisplayName(p), p));
+        using var picker = new NotePickerForm(
+            L.T("إكمال الرابط", "Complete the link"),
+            L.T("اكتب جزءاً من اسم الملاحظة:", "Type part of the note name:"),
+            items, allowCreate: true, insertMode: true);
+
+        string? name = null;
+        if (picker.ShowDialog(this) == DialogResult.OK)
+            name = picker.SelectedPath != null ? vault.DisplayName(picker.SelectedPath) : picker.CreateName;
+
+        if (name != null && name.Length > 0)
+        {
+            editor.Select(caret, 0);
+            editor.SelectedText = name + "]]";
+            FocusEditorFresh(L.T($"أُكمل الرابط إلى {name}", $"Link completed to {name}"));
+        }
+        else FocusEditorFresh();   // الإلغاء: نعيد التركيز فقط كي يواصل المستخدم الكتابة
+    }
+
     void InsertLink()
     {
         var items = vault.AllNotes().Select(p => (vault.DisplayName(p), p));
@@ -1412,6 +1455,44 @@ public class MainForm : AppForm
         editor.ScrollToCaret();
         editor.Focus();
         Announce(L.T($"عُثر عليه في السطر {LineFromIndex(text, idx) + 1}", $"Found at line {LineFromIndex(text, idx) + 1}"));
+    }
+
+    /// <summary>البحث والاستبدال داخل الملاحظة الحالية، مع إعلان عدد الاستبدالات.</summary>
+    void ReplaceInNote()
+    {
+        if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
+        using var dlg = new ReplaceForm(lastFind, ReplaceNextOccurrence, ReplaceAllOccurrences);
+        dlg.ShowDialog(this);
+        if (dlg.LastFind.Length > 0) lastFind = dlg.LastFind;
+        FocusEditorFresh();
+    }
+
+    bool ReplaceNextOccurrence(string find, string replacement)
+    {
+        var text = editor.Text;
+        int start = Math.Min(editor.SelectionStart + editor.SelectionLength, text.Length);
+        int idx = text.IndexOf(find, start, StringComparison.CurrentCultureIgnoreCase);
+        if (idx < 0) idx = text.IndexOf(find, 0, StringComparison.CurrentCultureIgnoreCase);  // لفّ من البداية
+        if (idx < 0) return false;
+        editor.Select(idx, find.Length);
+        editor.SelectedText = replacement;      // يمر بسجل التراجع كأي تعديل
+        editor.Select(idx, replacement.Length);
+        editor.ScrollToCaret();
+        return true;
+    }
+
+    int ReplaceAllOccurrences(string find, string replacement)
+    {
+        var updated = Vault.ReplaceAllOccurrences(editor.Text, find, replacement, out int count);
+        if (count == 0) return 0;
+
+        // الاستبدال دفعة واحدة عبر التحديد كي يكون خطوة تراجع واحدة
+        int caret = editor.SelectionStart;
+        editor.SelectAll();
+        editor.SelectedText = updated;
+        editor.Select(Math.Min(caret, editor.TextLength), 0);
+        editor.ScrollToCaret();
+        return count;
     }
 
     // ---------- التراجع والإعادة ----------
@@ -2035,7 +2116,7 @@ Ctrl+J — قائمة عناوين الملاحظة الحالية
 Ctrl+D — ملاحظة اليوم (تُنشأ في مجلد اليوميات)
 
 الروابط:
-اكتب [[اسم الملاحظة]] لإنشاء رابط.
+اكتب [[ فتُفتح قائمة الملاحظات لإكمال الرابط تلقائياً (تُعطَّل من الإعدادات).
 Ctrl+Enter — اتباع الرابط عند مؤشر الكتابة
 Ctrl+K — إدراج رابط عبر البحث عن ملاحظة
 Ctrl+B — الروابط الواردة إلى الملاحظة الحالية، ومعها قسم
@@ -2045,7 +2126,9 @@ Ctrl+L — الروابط الصادرة من الملاحظة الحالية (�
 
 البحث:
 Ctrl+F — بحث داخل الملاحظة، ثم F3 للتالي
+Ctrl+H — بحث واستبدال داخل الملاحظة (استبدال التالي أو الكل)
 Ctrl+Shift+F — البحث في كل ملاحظات القبو
+(يقبل عدة كلمات: تُعرض الملاحظات التي تحوي كل الكلمات ولو في أسطر متفرقة)
 Ctrl+T — استعراض الوسوم (اكتب #وسم في أي ملاحظة)
 
 التحرير:
@@ -2122,7 +2205,7 @@ Ctrl+J — list of headings in the current note
 Ctrl+D — today's note (created in the journal folder)
 
 Links:
-Write [[note name]] to create a link.
+Type [[ and the note list opens to complete the link (can be disabled in Settings).
 Ctrl+Enter — follow the link at the caret
 Ctrl+K — insert a link by searching for a note
 Ctrl+B — backlinks to the current note, plus an "unlinked mentions"
@@ -2132,7 +2215,9 @@ Ctrl+L — outgoing links from the current note (opens directly)
 
 Search:
 Ctrl+F — find in note, then F3 for next
+Ctrl+H — find and replace in the note (replace next or all)
 Ctrl+Shift+F — search all notes in the vault
+(accepts several words: notes containing all of them, even on different lines)
 Ctrl+T — browse tags (write #tag in any note)
 
 Editing:

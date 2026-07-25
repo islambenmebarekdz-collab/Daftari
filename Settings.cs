@@ -28,6 +28,8 @@ public class Settings
     public int BackupKeep { get; set; } = 10;
     /// <summary>مزامنة اسم ملف الملاحظة مع عنوانها (السطر الأول # عنوان) عند الحفظ والمغادرة.</summary>
     public bool SyncTitleToFileName { get; set; } = true;
+    /// <summary>فتح منتقي الملاحظات تلقائياً عند كتابة قوسين مربعين [[ لإكمال الرابط.</summary>
+    public bool LinkAutocomplete { get; set; } = true;
 
     static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Daftari");

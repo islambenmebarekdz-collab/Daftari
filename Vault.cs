@@ -155,37 +155,52 @@ public class Vault
     }
 
     /// <summary>
-    /// بحث مرجّح: تطابق عنوان الملاحظة (اسم الملف) يتصدّر، ثم الملاحظات ذات أكثر عدد تطابقات،
-    /// مع دعم البحث بالوسوم (#tag) في نفس الصندوق. النتائج مرتّبة، الأعلى ترجيحاً أولاً.
+    /// بحث مرجّح متعدد الكلمات: تُقسَّم العبارة إلى كلمات، وتُقبل الملاحظة إن احتوت **كل**
+    /// الكلمات (في عنوانها أو وسومها أو نصها) ولو في أسطر متفرقة. الترجيح: العنوان أولاً،
+    /// ثم العبارة الكاملة، ثم الوسوم، ثم عدد الأسطر المطابقة. النتائج مرتّبة، الأعلى أولاً.
     /// </summary>
     public IEnumerable<SearchHit> Search(string query)
     {
         query = query.Trim();
         if (query.Length == 0) yield break;
-        var tagQuery = query.TrimStart('#');
+        var terms = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
+        if (terms.Length == 0) yield break;
+
+        const StringComparison Cmp = StringComparison.OrdinalIgnoreCase;
+        bool MatchesTag(CachedNote n, string term)
+        {
+            var tag = term.TrimStart('#');
+            return tag.Length > 0 && n.Tags.Any(x => x.Contains(tag, Cmp));
+        }
 
         var scored = new List<(int Score, string Path, List<SearchHit> Hits)>();
         foreach (var (p, note) in Indexed())
         {
+            var title = DisplayName(p);
+
+            // شرط القبول: كل كلمة موجودة في مكان ما من الملاحظة
+            bool allPresent = terms.All(t =>
+                title.Contains(t, Cmp) || MatchesTag(note, t) || note.Lines.Any(l => l.Contains(t, Cmp)));
+            if (!allPresent) continue;
+
             var hits = new List<SearchHit>();
             for (int i = 0; i < note.Lines.Length; i++)
-                if (note.Lines[i].Contains(query, StringComparison.OrdinalIgnoreCase))
+                if (terms.Any(t => note.Lines[i].Contains(t, Cmp)))
                     hits.Add(new SearchHit(p, i, note.Lines[i].Trim()));
 
-            bool titleMatch = DisplayName(p).Contains(query, StringComparison.OrdinalIgnoreCase);
-            bool tagMatch = tagQuery.Length > 0 &&
-                            note.Tags.Any(t => t.Contains(tagQuery, StringComparison.OrdinalIgnoreCase));
+            int score = hits.Count;
+            if (terms.All(t => title.Contains(t, Cmp))) score += 2000;        // العنوان يحوي كل الكلمات
+            else if (terms.Any(t => title.Contains(t, Cmp))) score += 1000;   // العنوان يحوي بعضها
+            if (terms.Any(t => MatchesTag(note, t))) score += 200;
+            // العبارة كاملة متجاورة أقوى من كلمات متفرقة
+            if (terms.Length > 1 &&
+                (title.Contains(query, Cmp) || note.Lines.Any(l => l.Contains(query, Cmp))))
+                score += 500;
 
-            int bodyHits = hits.Count;
-            if (bodyHits == 0 && !titleMatch && !tagMatch) continue;
-
-            // الترجيح: العنوان يتصدّر (+1000)، ثم الوسم (+200)، ثم عدد التطابقات
-            int score = bodyHits + (titleMatch ? 1000 : 0) + (tagMatch ? 200 : 0);
-
-            // نتيجة نائبة تشير إلى الملاحظة عند تطابق العنوان أو الوسم فقط بلا تطابق في الأسطر
+            // نتيجة نائبة عند تطابق العنوان أو الوسم فقط بلا تطابق في الأسطر
             if (hits.Count == 0)
             {
-                var firstLine = note.Lines.FirstOrDefault(l => l.Trim().Length > 0)?.Trim() ?? DisplayName(p);
+                var firstLine = note.Lines.FirstOrDefault(l => l.Trim().Length > 0)?.Trim() ?? title;
                 hits.Add(new SearchHit(p, 0, firstLine));
             }
             scored.Add((score, p, hits));
@@ -354,6 +369,30 @@ public class Vault
         var dest = UniqueDestination(destFolder, Path.GetFileName(source));
         MovePath(source, dest);
         return dest;
+    }
+
+    /// <summary>
+    /// استبدال كل تطابقات نص بآخر تجاهلاً لحالة الأحرف، مع إرجاع عدد التطابقات.
+    /// دالة نقية منفصلة عن الواجهة كي تكون قابلة للاختبار.
+    /// </summary>
+    public static string ReplaceAllOccurrences(string text, string find, string replacement, out int count)
+    {
+        count = 0;
+        if (string.IsNullOrEmpty(find)) return text;
+
+        var sb = new StringBuilder();
+        int at = 0;
+        while (true)
+        {
+            int j = text.IndexOf(find, at, StringComparison.CurrentCultureIgnoreCase);
+            if (j < 0) break;
+            sb.Append(text, at, j - at).Append(replacement);
+            at = j + find.Length;
+            count++;
+        }
+        if (count == 0) return text;
+        sb.Append(text, at, text.Length - at);
+        return sb.ToString();
     }
 
     /// <summary>

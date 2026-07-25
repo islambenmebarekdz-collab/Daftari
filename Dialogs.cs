@@ -102,9 +102,14 @@ public class NotePickerForm : AppForm
     public string? SelectedPath { get; private set; }
     public string? CreateName { get; private set; }
 
-    public NotePickerForm(string title, string prompt, IEnumerable<(string Display, string Path)> items, bool allowCreate)
+    /// <summary>في وضع الإدراج يُدرج الاسم كرابط فقط دون إنشاء ملف، فتتغيّر صياغة الخيار.</summary>
+    readonly bool insertMode;
+
+    public NotePickerForm(string title, string prompt, IEnumerable<(string Display, string Path)> items,
+                          bool allowCreate, bool insertMode = false)
     {
         this.allowCreate = allowCreate;
+        this.insertMode = insertMode;
         all = items.OrderBy(x => x.Display, StringComparer.CurrentCultureIgnoreCase).ToList();
 
         Text = title;
@@ -170,7 +175,9 @@ public class NotePickerForm : AppForm
         }
         if (list.Items.Count == 0 && allowCreate && q.Length > 0)
         {
-            list.Items.Add(L.T($"إنشاء ملاحظة جديدة باسم: {q}", $"Create a new note named: {q}"));
+            list.Items.Add(insertMode
+                ? L.T($"إدراج رابط جديد باسم: {q}", $"Insert a new link named: {q}")
+                : L.T($"إنشاء ملاحظة جديدة باسم: {q}", $"Create a new note named: {q}"));
             payloads.Add(null);
         }
         if (list.Items.Count > 0) list.SelectedIndex = 0;
@@ -624,6 +631,7 @@ public class SettingsForm : AppForm
     readonly CheckBox autoBackup = new();
     readonly NumericUpDown backupKeep = new();
     readonly CheckBox syncTitle = new();
+    readonly CheckBox linkAuto = new();
 
     public bool LanguageChanged { get; private set; }
 
@@ -638,7 +646,7 @@ public class SettingsForm : AppForm
         MaximizeBox = false;
         ShowInTaskbar = false;
         StartPosition = FormStartPosition.CenterParent;
-        ClientSize = new Size(560, 520);
+        ClientSize = new Size(560, 560);
 
         int y = 16;
         void AddLabel(string text)
@@ -721,6 +729,14 @@ public class SettingsForm : AppForm
         syncTitle.AccessibleName = syncTitle.Text;
         syncTitle.Checked = settings.SyncTitleToFileName;
         Controls.Add(syncTitle);
+        y += 34;
+
+        linkAuto.Text = L.T("فتح منتقي الملاحظات عند كتابة [[ لإكمال الرابط",
+                            "Open the note picker when typing [[ to complete a link");
+        linkAuto.SetBounds(16, y, 500, 28);
+        linkAuto.AccessibleName = linkAuto.Text;
+        linkAuto.Checked = settings.LinkAutocomplete;
+        Controls.Add(linkAuto);
         y += 40;
 
         var ok = new Button { Text = L.T("حفظ", "Save"), DialogResult = DialogResult.OK, Width = 110 };
@@ -745,7 +761,87 @@ public class SettingsForm : AppForm
         settings.AutoBackupOnExit = autoBackup.Checked;
         settings.BackupKeep = (int)backupKeep.Value;
         settings.SyncTitleToFileName = syncTitle.Checked;
+        settings.LinkAutocomplete = linkAuto.Checked;
         settings.Save();
+    }
+}
+
+/// <summary>
+/// البحث والاستبدال داخل الملاحظة: يبقى مفتوحاً بينما ينفّذ العمليات على المحرر خلفه
+/// عبر دالتَي استدعاء، مع إعلان النتيجة لقارئ الشاشة بعد كل عملية.
+/// </summary>
+public class ReplaceForm : AppForm
+{
+    readonly TextBox findBox = new();
+    readonly TextBox replaceBox = new();
+    readonly Func<string, string, bool> replaceNext;
+    readonly Func<string, string, int> replaceAll;
+
+    public string LastFind => findBox.Text;
+
+    public ReplaceForm(string initialFind, Func<string, string, bool> replaceNext, Func<string, string, int> replaceAll)
+    {
+        this.replaceNext = replaceNext;
+        this.replaceAll = replaceAll;
+
+        Text = L.T("بحث واستبدال", "Find and replace");
+        RightToLeft = L.Rtl;
+        RightToLeftLayout = L.RtlLayout;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.CenterParent;
+        ClientSize = new Size(520, 220);
+        KeyPreview = true;
+
+        var lblFind = new Label { Text = L.T("البحث عن:", "Find:"), Left = 16, Top = 16, Width = 480 };
+        findBox.SetBounds(16, 42, 480, 30);
+        findBox.AccessibleName = L.T("نص البحث", "Text to find");
+        findBox.Text = initialFind;
+
+        var lblRepl = new Label { Text = L.T("الاستبدال بـ:", "Replace with:"), Left = 16, Top = 82, Width = 480 };
+        replaceBox.SetBounds(16, 108, 480, 30);
+        replaceBox.AccessibleName = L.T("نص الاستبدال", "Replacement text");
+
+        var next = new Button { Text = L.T("استبدال التالي", "Replace next"), Left = 16, Top = 154, Width = 150, Height = 36 };
+        next.Click += (_, _) => DoNext();
+        var all = new Button { Text = L.T("استبدال الكل", "Replace all"), Left = 174, Top = 154, Width = 150, Height = 36 };
+        all.Click += (_, _) => DoAll();
+        var close = new Button { Text = L.T("إغلاق", "Close"), Left = 332, Top = 154, Width = 150, Height = 36, DialogResult = DialogResult.Cancel };
+
+        Controls.AddRange(new Control[] { lblFind, findBox, lblRepl, replaceBox, next, all, close });
+        AcceptButton = next;
+        CancelButton = close;
+        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); } };
+        Shown += (_, _) => { findBox.SelectAll(); findBox.Focus(); };
+    }
+
+    void DoNext()
+    {
+        if (findBox.Text.Length == 0) { Say(L.T("اكتب نص البحث أولاً", "Type the text to find first")); return; }
+        Say(replaceNext(findBox.Text, replaceBox.Text)
+            ? L.T("استُبدل تطابق واحد", "Replaced one match")
+            : L.T($"لم يُعثر على \"{findBox.Text}\"", $"\"{findBox.Text}\" not found"));
+    }
+
+    void DoAll()
+    {
+        if (findBox.Text.Length == 0) { Say(L.T("اكتب نص البحث أولاً", "Type the text to find first")); return; }
+        int n = replaceAll(findBox.Text, replaceBox.Text);
+        Say(n > 0 ? L.T($"استُبدل {n} تطابقاً", $"Replaced {n} matches")
+                  : L.T($"لم يُعثر على \"{findBox.Text}\"", $"\"{findBox.Text}\" not found"));
+    }
+
+    void Say(string message)
+    {
+        try
+        {
+            (ActiveControl ?? (Control)this).AccessibilityObject.RaiseAutomationNotification(
+                AutomationNotificationKind.ActionCompleted,
+                AutomationNotificationProcessing.MostRecent, message);
+        }
+        catch { }
     }
 }
 
