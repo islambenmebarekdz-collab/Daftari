@@ -284,6 +284,7 @@ public class MainForm : AppForm
         edit.DropDownItems.Add(MI(L.T("إدراج رابط لملاحظة...", "Insert link to a note..."), Keys.Control | Keys.K, (_, _) => InsertLink()));
         edit.DropDownItems.Add(MI(L.T("إدراج كتلة كود...", "Insert code block..."), Keys.Control | Keys.Shift | Keys.K, (_, _) => InsertCodeBlock()));
         edit.DropDownItems.Add(MI(L.T("جدول: إنشاء أو تحرير...", "Table: create or edit..."), Keys.Control | Keys.Shift | Keys.G, (_, _) => EditTable()));
+        edit.DropDownItems.Add(MI(L.T("مهمة: إنشاء أو تبديل الإنجاز", "Task: create or toggle done"), Keys.Control | Keys.Shift | Keys.X, (_, _) => ToggleTaskAtCaret()));
         edit.DropDownItems.Add(MI(L.T("إدراج التاريخ والوقت", "Insert date and time"), Keys.Control | Keys.Shift | Keys.T, (_, _) => InsertTimestamp()));
         edit.DropDownItems.Add(MI(L.T("نسخ الملاحظة كاملة", "Copy entire note"), Keys.Control | Keys.Shift | Keys.C, (_, _) => CopyNote()));
         edit.DropDownItems.Add(MI(L.T("معاينة HTML في المتصفح", "HTML preview in browser"), Keys.Control | Keys.Shift | Keys.H, (_, _) => PreviewHtml()));
@@ -308,6 +309,7 @@ public class MainForm : AppForm
         nav.DropDownItems.Add(MI(L.T("الروابط الصادرة...", "Outgoing links..."), Keys.Control | Keys.L, (_, _) => ShowOutgoingLinks()));
         nav.DropDownItems.Add(MI(L.T("عناوين الملاحظة...", "Note headings..."), Keys.Control | Keys.J, (_, _) => ShowHeadings()));
         nav.DropDownItems.Add(MI(L.T("الوسوم...", "Tags..."), Keys.Control | Keys.T, (_, _) => ShowTags()));
+        nav.DropDownItems.Add(MI(L.T("كل المهام...", "All tasks..."), Keys.Control | Keys.Shift | Keys.O, (_, _) => ShowTasks()));
         nav.DropDownItems.Add(MI(L.T("ملاحظة اليوم", "Today's note"), Keys.Control | Keys.D, (_, _) => OpenDailyNote()));
         nav.DropDownItems.Add(new ToolStripSeparator());
         nav.DropDownItems.Add(MI(L.T("البحث في كل الملاحظات...", "Search all notes..."), Keys.Control | Keys.Shift | Keys.F, (_, _) => SearchVault()));
@@ -1890,6 +1892,52 @@ public class MainForm : AppForm
         FocusEditorFresh();
     }
 
+    /// <summary>
+    /// يقلب حالة المهمة عند مؤشر الكتابة، ويحوّل السطر العادي إلى مهمة مفتوحة —
+    /// فتُنشأ المهام وتُنجز بالاختصار نفسه دون كتابة الأقواس يدوياً.
+    /// </summary>
+    void ToggleTaskAtCaret()
+    {
+        if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
+        var text = editor.Text;
+        var lines = editor.Lines;
+        if (lines.Length == 0) { Announce(L.T("الملاحظة فارغة", "The note is empty")); return; }
+
+        int lineIndex = Math.Min(LineFromIndex(text, editor.SelectionStart), lines.Length - 1);
+        var original = lines[lineIndex];
+        var updated = Vault.ToggleTaskLine(original, out bool isDone);
+        if (updated == original) return;
+
+        int start = LineStartIndex(text, lineIndex);
+        int caretInLine = Math.Max(0, editor.SelectionStart - start);
+        editor.Select(start, original.Length);
+        editor.SelectedText = updated;
+        // نحافظ على موضع المؤشر داخل السطر بعد تغيّر طوله
+        int shift = updated.Length - original.Length;
+        editor.Select(Math.Min(start + Math.Max(0, caretInLine + shift), editor.TextLength), 0);
+        editor.ScrollToCaret();
+
+        var body = updated.TrimStart();
+        Announce(isDone
+            ? L.T($"أُنجزت المهمة: {body}", $"Task completed: {body}")
+            : L.T($"مهمة مفتوحة: {body}", $"Open task: {body}"));
+    }
+
+    /// <summary>كل مهام القبو المفتوحة في قائمة واحدة، مع فتحها أو إنجازها من مكانها.</summary>
+    void ShowTasks()
+    {
+        SaveCurrent();                     // كي لا تتعارض تعديلات المحرر مع الكتابة على القرص
+        using var dlg = new TasksForm(vault);
+        var result = dlg.ShowDialog(this);
+        if (dlg.Changed) RefreshIfChangedExternally();   // الملاحظة المفتوحة قد تكون تغيّرت
+        if (result == DialogResult.OK && dlg.Selected is TaskItem t)
+        {
+            OpenNote(t.FilePath, t.LineNumber);
+            FocusEditorFresh();
+        }
+        else if (dlg.Changed) FocusEditorFresh();
+    }
+
     void InsertTimestamp()
     {
         if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
@@ -2404,6 +2452,11 @@ Ctrl+Shift+F — البحث في كل ملاحظات القبو
 (يقبل عدة كلمات: تُعرض الملاحظات التي تحوي كل الكلمات ولو في أسطر متفرقة)
 Ctrl+T — استعراض الوسوم (اكتب #وسم في أي ملاحظة)
 
+المهام:
+Ctrl+Shift+X — يحوّل السطر إلى مهمة، أو يبدّل بين مفتوحة ومنجزة
+Ctrl+Shift+O — كل مهام القبو في قائمة واحدة: Enter يفتح مصدر المهمة،
+ومسافة أو F2 تعلّمها منجزة من مكانها دون مغادرة القائمة
+
 التحرير:
 Ctrl+Z — تراجع
 Ctrl+Y أو Ctrl+Shift+Z — إعادة
@@ -2501,6 +2554,11 @@ Ctrl+H — find and replace in the note (replace next or all)
 Ctrl+Shift+F — search all notes in the vault
 (accepts several words: notes containing all of them, even on different lines)
 Ctrl+T — browse tags (write #tag in any note)
+
+Tasks:
+Ctrl+Shift+X — turn the line into a task, or toggle open/done
+Ctrl+Shift+O — every task in the vault in one list: Enter opens its source,
+Space or F2 marks it done without leaving the list
 
 Editing:
 Ctrl+Z — undo

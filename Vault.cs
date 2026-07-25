@@ -5,6 +5,9 @@ namespace Daftari;
 
 public record SearchHit(string FilePath, int LineNumber, string LineText);
 
+/// <summary>مهمة داخل ملاحظة: سطر بصيغة قائمة مهام في Markdown.</summary>
+public record TaskItem(string FilePath, int LineNumber, string Text, bool Done);
+
 /// <summary>
 /// القبو: مجلد على القرص يحتوي ملفات Markdown. متوافق مع قبو Obsidian.
 /// يحتفظ بفهرس في الذاكرة (أسطر، روابط، وسوم) مصحوباً ببصمة وقت التعديل،
@@ -383,6 +386,71 @@ public class Vault
         var dest = UniqueDestination(destFolder, Path.GetFileName(source));
         MovePath(source, dest);
         return dest;
+    }
+
+    // صيغة المهام في Markdown: "- [ ] نص" أو "- [x] نص" مع أي مسافة بادئة وأي علامة قائمة
+    static readonly Regex TaskLine = new(@"^(\s*)([-*+])\s+\[([ xX])\]\s?(.*)$", RegexOptions.Compiled);
+    static readonly Regex BulletLine = new(@"^(\s*)([-*+])\s+(.*)$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// يقلب حالة سطر مهمة: مفتوحة تصير منجزة والعكس. والسطر العادي أو عنصر القائمة
+    /// يتحوّل إلى مهمة مفتوحة، فتُنشأ المهام بالاختصار نفسه دون كتابة الأقواس يدوياً.
+    /// </summary>
+    public static string ToggleTaskLine(string line, out bool isDone)
+    {
+        var task = TaskLine.Match(line);
+        if (task.Success)
+        {
+            isDone = task.Groups[3].Value is not ("x" or "X");
+            return $"{task.Groups[1].Value}{task.Groups[2].Value} [{(isDone ? "x" : " ")}] {task.Groups[4].Value}";
+        }
+
+        isDone = false;
+        var bullet = BulletLine.Match(line);
+        if (bullet.Success)
+            return $"{bullet.Groups[1].Value}{bullet.Groups[2].Value} [ ] {bullet.Groups[3].Value}";
+
+        var indent = line.Length - line.TrimStart().Length;
+        return line[..indent] + "- [ ] " + line.TrimStart();
+    }
+
+    /// <summary>كل المهام في القبو مرتّبةً بالملاحظة ثم السطر؛ المفتوحة فقط ما لم يُطلب غيرها.</summary>
+    public IEnumerable<TaskItem> Tasks(bool includeDone = false)
+    {
+        var found = new List<TaskItem>();
+        foreach (var (p, note) in Indexed())
+            for (int i = 0; i < note.Lines.Length; i++)
+            {
+                var m = TaskLine.Match(note.Lines[i]);
+                if (!m.Success) continue;
+                bool done = m.Groups[3].Value is "x" or "X";
+                if (done && !includeDone) continue;
+                var text = m.Groups[4].Value.Trim();
+                if (text.Length == 0) continue;      // مربّع فارغ بلا نص ليس مهمة
+                found.Add(new TaskItem(p, i, text, done));
+            }
+        return found
+            .OrderBy(t => DisplayName(t.FilePath), StringComparer.CurrentCultureIgnoreCase)
+            .ThenBy(t => t.LineNumber);
+    }
+
+    /// <summary>يضبط حالة مهمة في ملف على القرص مباشرة. يعيد false إن لم يكن السطر مهمة.</summary>
+    public bool SetTaskDone(string filePath, int lineNumber, bool done)
+    {
+        string[] lines;
+        try { lines = File.ReadAllText(filePath).Replace("\r\n", "\n").Split('\n'); }
+        catch { return false; }
+        if (lineNumber < 0 || lineNumber >= lines.Length) return false;
+
+        var m = TaskLine.Match(lines[lineNumber]);
+        if (!m.Success) return false;
+        lines[lineNumber] = $"{m.Groups[1].Value}{m.Groups[2].Value} [{(done ? "x" : " ")}] {m.Groups[4].Value}";
+        try
+        {
+            File.WriteAllText(filePath, string.Join("\r\n", lines), new UTF8Encoding(false));
+            return true;
+        }
+        catch { return false; }
     }
 
     /// <summary>

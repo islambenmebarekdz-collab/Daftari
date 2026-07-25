@@ -769,6 +769,138 @@ public class SettingsForm : AppForm
 }
 
 /// <summary>
+/// كل المهام المفتوحة في القبو في مكان واحد: Enter يفتح مصدر المهمة،
+/// ومسافة أو F2 تعلّمها منجزة مباشرة دون مغادرة القائمة.
+/// </summary>
+public class TasksForm : AppForm
+{
+    readonly Vault vault;
+    readonly ListBox list = new();
+    readonly Label header = new();
+    readonly CheckBox showDone = new();
+    List<TaskItem> items = new();
+
+    public TaskItem? Selected { get; private set; }
+    /// <summary>هل غُيّرت حالة أي مهمة؟ (فتحتاج الملاحظة المفتوحة إعادة تحميل)</summary>
+    public bool Changed { get; private set; }
+
+    public TasksForm(Vault vault)
+    {
+        this.vault = vault;
+        Text = L.T("المهام", "Tasks");
+        RightToLeft = L.Rtl;
+        RightToLeftLayout = L.RtlLayout;
+        StartPosition = FormStartPosition.CenterParent;
+        ShowInTaskbar = false;
+        MinimizeBox = false;
+        ClientSize = new Size(700, 500);
+        KeyPreview = true;
+
+        header.Dock = DockStyle.Top;
+        header.Height = 28;
+        header.Padding = new Padding(8, 6, 8, 0);
+
+        list.Dock = DockStyle.Fill;
+        list.AccessibleName = L.T("قائمة المهام", "Task list");
+        list.IntegralHeight = false;
+
+        showDone.Text = L.T("إظهار المهام المنجزة أيضاً", "Show completed tasks too");
+        showDone.AccessibleName = showDone.Text;
+        showDone.Dock = DockStyle.Bottom;
+        showDone.Height = 28;
+        showDone.CheckedChanged += (_, _) => Fill();
+
+        var buttons = new FlowLayoutPanel { Dock = DockStyle.Bottom, AutoSize = true, Padding = new Padding(8, 6, 8, 6) };
+        var openBtn = new Button { Text = L.T("فتح المهمة", "Open task"), AutoSize = true };
+        openBtn.Click += (_, _) => Accept();
+        var toggleBtn = new Button { Text = L.T("تبديل الإنجاز", "Toggle done"), AutoSize = true };
+        toggleBtn.Click += (_, _) => ToggleSelected();
+        var close = new Button { Text = L.T("إغلاق", "Close"), AutoSize = true, DialogResult = DialogResult.Cancel };
+        buttons.Controls.AddRange(new Control[] { openBtn, toggleBtn, close });
+
+        Controls.Add(list);
+        Controls.Add(buttons);
+        Controls.Add(showDone);
+        Controls.Add(header);
+        CancelButton = close;
+
+        list.KeyDown += (_, e) =>
+        {
+            if (e.KeyCode == Keys.Enter) { Accept(); e.SuppressKeyPress = true; }
+            else if (e.KeyCode is Keys.Space or Keys.F2) { ToggleSelected(); e.SuppressKeyPress = true; }
+        };
+        list.DoubleClick += (_, _) => Accept();
+        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { DialogResult = DialogResult.Cancel; Close(); } };
+
+        Fill();
+        Shown += (_, _) => list.Focus();
+    }
+
+    void Fill()
+    {
+        int keep = list.SelectedIndex;
+        items = vault.Tasks(includeDone: showDone.Checked).ToList();
+        list.BeginUpdate();
+        list.Items.Clear();
+        foreach (var t in items)
+        {
+            var state = t.Done ? L.T("منجزة", "done") : L.T("مفتوحة", "open");
+            list.Items.Add(L.T($"{t.Text} — {vault.DisplayName(t.FilePath)} — السطر {t.LineNumber + 1} — {state}",
+                               $"{t.Text} — {vault.DisplayName(t.FilePath)} — line {t.LineNumber + 1} — {state}"));
+        }
+        list.EndUpdate();
+
+        int open = items.Count(t => !t.Done);
+        header.Text = showDone.Checked
+            ? L.T($"كل المهام: {items.Count}، منها {open} مفتوحة", $"All tasks: {items.Count}, {open} open")
+            : L.T($"المهام المفتوحة: {open}", $"Open tasks: {open}");
+
+        if (list.Items.Count > 0)
+            list.SelectedIndex = Math.Min(Math.Max(keep, 0), list.Items.Count - 1);
+        else
+            list.Items.Add(L.T("لا توجد مهام — اكتب مهمة بالاختصار داخل أي ملاحظة",
+                               "No tasks — create one with the shortcut inside any note"));
+    }
+
+    TaskItem? Current =>
+        list.SelectedIndex >= 0 && list.SelectedIndex < items.Count ? items[list.SelectedIndex] : null;
+
+    void Accept()
+    {
+        if (Current is not TaskItem t) return;
+        Selected = t;
+        DialogResult = DialogResult.OK;
+        Close();
+    }
+
+    void ToggleSelected()
+    {
+        if (Current is not TaskItem t) return;
+        if (!vault.SetTaskDone(t.FilePath, t.LineNumber, !t.Done))
+        {
+            Say(L.T("تعذّر تغيير حالة المهمة", "Could not change the task state"));
+            return;
+        }
+        Changed = true;
+        Fill();
+        Say(!t.Done
+            ? L.T($"أُنجزت: {t.Text}", $"Completed: {t.Text}")
+            : L.T($"أُعيدت مفتوحة: {t.Text}", $"Reopened: {t.Text}"));
+    }
+
+    void Say(string message)
+    {
+        try
+        {
+            (ActiveControl ?? (Control)this).AccessibilityObject.RaiseAutomationNotification(
+                AutomationNotificationKind.ActionCompleted,
+                AutomationNotificationProcessing.MostRecent, message);
+        }
+        catch { }
+    }
+}
+
+/// <summary>
 /// ضبط كلمة مرور قفل ملاحظة: حقلان مقنّعان للتأكيد، مؤشر قوة يُعلن لقارئ الشاشة،
 /// وتحذير صريح بأن نسيان كلمة المرور يعني ضياع الملاحظة بلا استرجاع.
 /// </summary>
