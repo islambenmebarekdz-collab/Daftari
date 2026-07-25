@@ -28,6 +28,11 @@ public class MainForm : AppForm
     bool loading;
     string lastFind = "";
 
+    // بصمة وقت الملاحظة المفتوحة كما قرأناها من القرص: تكشف أي تعديل خارجي
+    // (Obsidian، مزامنة سحابية، محرر آخر) قبل أن نكتب فوقه
+    DateTime currentNoteStamp;
+    bool resolvingConflict;
+
     // سجل التراجع والإعادة: حقل النص القياسي يدعم خطوة واحدة فقط، فنحتفظ بسجل كامل بأنفسنا.
     // التعديلات المتتابعة خلال فترة قصيرة تُجمع في خطوة واحدة كي لا يتراجع المستخدم حرفاً حرفاً.
     readonly List<(string Text, int Caret)> undoStack = new();
@@ -57,8 +62,11 @@ public class MainForm : AppForm
         BuildLayout();
         OpenVault(ResolveVaultPath());
 
-        autosaveTimer.Tick += (_, _) => SaveCurrent();
+        // الحفظ الدوري، أو التقاط أي تعديل خارجي حين لا توجد تعديلات محلية
+        autosaveTimer.Tick += (_, _) => { if (dirty) SaveCurrent(); else RefreshIfChangedExternally(); };
         autosaveTimer.Start();
+        // العودة إلى التطبيق بعد التحرير في برنامج آخر: أنسب لحظة لالتقاط التغيير
+        Activated += (_, _) => RefreshIfChangedExternally();
         countTimer.Tick += (_, _) => { countTimer.Stop(); UpdateCount(); };
         burstTimer.Tick += (_, _) => { burstTimer.Stop(); editBurst = false; };
 
@@ -569,6 +577,7 @@ public class MainForm : AppForm
         editor.Text = text.Replace("\r\n", "\n").Replace("\n", "\r\n");
         loading = false;
         currentNote = path;
+        currentNoteStamp = StampOf(path);
         dirty = false;
         ResetHistory();
         Text = $"{vault.DisplayName(path)} — {L.T("دفتري", "Daftari")}";
@@ -595,13 +604,111 @@ public class MainForm : AppForm
             if (announce) Announce(L.T("لا توجد تغييرات للحفظ", "No changes to save"));
             return;
         }
+        if (!ResolveExternalChange()) return;   // عولج التعارض بإعادة تحميل، فلا نكتب
         try
         {
             File.WriteAllText(currentNote, editor.Text, new UTF8Encoding(false));
             dirty = false;
+            currentNoteStamp = StampOf(currentNote);
             if (announce) Announce(L.T("تم الحفظ", "Saved"));
         }
         catch (Exception ex) { Msg(L.T("تعذر الحفظ: ", "Could not save: ") + ex.Message); }
+    }
+
+    static DateTime StampOf(string path)
+    {
+        try { return File.GetLastWriteTimeUtc(path); }
+        catch { return DateTime.MinValue; }
+    }
+
+    /// <summary>
+    /// يتحقق قبل الحفظ من أن الملف لم يتغيّر على القرص منذ قراءتنا له.
+    /// يعيد true إذا جاز الحفظ، وfalse إذا عولج التعارض بإعادة التحميل بدل الكتابة.
+    /// </summary>
+    bool ResolveExternalChange()
+    {
+        if (currentNote == null || resolvingConflict) return true;
+        if (!File.Exists(currentNote)) return true;              // حُذف من الخارج: نعيد كتابته حفاظاً على النص
+        if (currentNoteStamp == DateTime.MinValue) return true;   // لا بصمة موثوقة
+        var onDisk = StampOf(currentNote);
+        if (onDisk == currentNoteStamp) return true;              // لا تغيير خارجي
+
+        resolvingConflict = true;
+        autosaveTimer.Stop();
+        try
+        {
+            using var dlg = new ConflictForm(vault.DisplayName(currentNote));
+            dlg.ShowDialog(this);
+            switch (dlg.Choice)
+            {
+                case ConflictChoice.KeepMine:
+                    currentNoteStamp = onDisk;                    // نتجاوز الفحص ونكتب فوقه
+                    return true;
+
+                case ConflictChoice.ReloadDisk:
+                    ReloadFromDisk(L.T("أُعيد تحميل نسخة القرص", "Reloaded the version from disk"));
+                    return false;
+
+                default: // SaveCopy — الأسلم: لا يضيع نص
+                    try
+                    {
+                        var suffix = L.T($"نسختي {DateTime.Now:yyyy-MM-dd HHmm}", $"my copy {DateTime.Now:yyyy-MM-dd HHmm}");
+                        var copy = vault.SaveSideCopy(currentNote, suffix, editor.Text);
+                        ReloadFromDisk(L.T($"حُفظت نسختك في {vault.DisplayName(copy)}، وفُتحت نسخة القرص",
+                                           $"Your version was saved as {vault.DisplayName(copy)}; the disk version is now open"));
+                        LoadTree();
+                    }
+                    catch (Exception ex)
+                    {
+                        Msg(L.T("تعذّر حفظ نسختك: ", "Could not save your version: ") + ex.Message);
+                        return false;
+                    }
+                    return false;
+            }
+        }
+        finally
+        {
+            resolvingConflict = false;
+            autosaveTimer.Start();
+        }
+    }
+
+    /// <summary>يعيد تحميل الملاحظة المفتوحة من القرص مع الحفاظ على موضع المؤشر قدر الإمكان.</summary>
+    void ReloadFromDisk(string announcement)
+    {
+        if (currentNote == null || !File.Exists(currentNote)) return;
+        try
+        {
+            int caret = editor.SelectionStart;
+            loading = true;
+            editor.Text = File.ReadAllText(currentNote).Replace("\r\n", "\n").Replace("\n", "\r\n");
+            loading = false;
+            dirty = false;
+            currentNoteStamp = StampOf(currentNote);
+            ResetHistory();
+            editor.Select(Math.Min(caret, editor.TextLength), 0);
+            editor.ScrollToCaret();
+            UpdateCount();
+            if (announcement.Length > 0) Announce(announcement);
+        }
+        catch (Exception ex)
+        {
+            loading = false;
+            Msg(L.T("تعذّرت إعادة التحميل: ", "Could not reload: ") + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// تحديث صامت للملاحظة المفتوحة إن تغيّرت على القرص ولا توجد تعديلات غير محفوظة —
+    /// فلا يصل المستخدم أصلاً إلى حالة تعارض في الحالة الشائعة.
+    /// </summary>
+    void RefreshIfChangedExternally()
+    {
+        if (currentNote == null || dirty || loading || resolvingConflict) return;
+        if (!File.Exists(currentNote) || currentNoteStamp == DateTime.MinValue) return;
+        if (StampOf(currentNote) == currentNoteStamp) return;
+        ReloadFromDisk(L.T("حُدّثت الملاحظة من القرص بعد تعديل خارجي",
+                           "The note was refreshed from disk after an external change"));
     }
 
     // ---------- إنشاء وإعادة تسمية وحذف ----------
@@ -675,6 +782,7 @@ public class MainForm : AppForm
                 currentNote = dest;
             else if (!isFile && currentNote.StartsWith(path + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 currentNote = dest + currentNote[path.Length..];
+            currentNoteStamp = StampOf(currentNote);   // المسار تغيّر، فتُجدَّد البصمة
         }
 
         // تحديث كل روابط [[الاسم القديم]] في القبو كي لا تنكسر بصمت
@@ -776,6 +884,7 @@ public class MainForm : AppForm
             SaveCurrent();                                  // ضمان كتابة المحتوى قبل النقل
             File.Move(currentNote, dest);
             currentNote = dest;
+            currentNoteStamp = StampOf(dest);
 
             int updated = vault.UpdateLinks(oldName, title);
             if (updated > 0)
@@ -786,6 +895,7 @@ public class MainForm : AppForm
                 editor.Text = File.ReadAllText(currentNote).Replace("\r\n", "\n").Replace("\n", "\r\n");
                 loading = false;
                 dirty = false;
+                currentNoteStamp = StampOf(currentNote);
                 ResetHistory();
                 editor.Select(Math.Min(caret, editor.TextLength), 0);
             }
@@ -841,6 +951,7 @@ public class MainForm : AppForm
                 currentNote = newPath;
             else if (isFolder && currentNote.StartsWith(path + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 currentNote = newPath + currentNote[path.Length..];
+            currentNoteStamp = StampOf(currentNote);   // المسار تغيّر، فتُجدَّد البصمة
         }
 
         LoadTree();

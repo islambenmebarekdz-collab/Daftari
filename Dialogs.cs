@@ -749,6 +749,75 @@ public class SettingsForm : AppForm
     }
 }
 
+public enum ConflictChoice { SaveCopy, KeepMine, ReloadDisk }
+
+/// <summary>
+/// يُعرض عند اكتشاف تعديل خارجي على الملاحظة المفتوحة (من Obsidian أو مزامنة سحابية
+/// أو محرر آخر) بينما لدى المستخدم تعديلات غير محفوظة. أزرار مسمّاة بوضوح بدل
+/// نعم/لا كي يفهم مستخدم قارئ الشاشة عاقبة كل خيار، والافتراضي هو الأسلم (حفظ الاثنين).
+/// </summary>
+public class ConflictForm : AppForm
+{
+    public ConflictChoice Choice { get; private set; } = ConflictChoice.SaveCopy;
+
+    public ConflictForm(string noteName)
+    {
+        Text = L.T("تعارض في الملاحظة", "Note conflict");
+        RightToLeft = L.Rtl;
+        RightToLeftLayout = L.RtlLayout;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MinimizeBox = false;
+        MaximizeBox = false;
+        ShowInTaskbar = false;
+        StartPosition = FormStartPosition.CenterParent;
+        ClientSize = new Size(560, 300);
+        KeyPreview = true;
+
+        var lbl = new Label
+        {
+            Text = L.T(
+                $"تغيّرت الملاحظة \"{noteName}\" على القرص من خارج دفتري، ولديك تعديلات غير محفوظة.\n\nاختر ما تريد:",
+                $"The note \"{noteName}\" changed on disk outside Daftari, and you have unsaved edits.\n\nChoose what to do:"),
+            Left = 16, Top = 16, Width = 528, Height = 90
+        };
+        Controls.Add(lbl);
+
+        int y = 116;
+        Button Choice3(string text, string hint, ConflictChoice choice)
+        {
+            var b = new Button { Text = text, Left = 16, Top = y, Width = 528, Height = 44 };
+            b.AccessibleName = text;
+            b.AccessibleDescription = hint;
+            b.Click += (_, _) => { Choice = choice; DialogResult = DialogResult.OK; Close(); };
+            Controls.Add(b);
+            y += 52;
+            return b;
+        }
+
+        var copyBtn = Choice3(
+            L.T("حفظ نسختي كملف منفصل، وفتح نسخة القرص (الأسلم)",
+                "Save my version as a separate file and load the disk version (safest)"),
+            L.T("لا يُفقد أي نص: تُحفظ تعديلاتك في ملف جديد بجوار الملاحظة",
+                "Nothing is lost: your edits are saved to a new file next to the note"),
+            ConflictChoice.SaveCopy);
+        Choice3(
+            L.T("الاحتفاظ بنسختي والكتابة فوق تعديل القرص",
+                "Keep my version and overwrite the disk changes"),
+            L.T("يُمحى التعديل الخارجي نهائياً", "The external change is permanently discarded"),
+            ConflictChoice.KeepMine);
+        Choice3(
+            L.T("إهمال تعديلاتي وإعادة تحميل نسخة القرص",
+                "Discard my edits and reload the disk version"),
+            L.T("تُفقد تعديلاتك غير المحفوظة", "Your unsaved edits are lost"),
+            ConflictChoice.ReloadDisk);
+
+        AcceptButton = copyBtn;
+        // الإغلاق بلا اختيار يعني الخيار الأسلم، فلا يضيع نص في كل الأحوال
+        KeyDown += (_, e) => { if (e.KeyCode == Keys.Escape) { Choice = ConflictChoice.SaveCopy; DialogResult = DialogResult.OK; Close(); } };
+        Shown += (_, _) => copyBtn.Focus();
+    }
+}
+
 /// <summary>
 /// منتقي مجلد بشجرة حقيقية (أب/ابن) بدل قائمة مسارات مسطّحة — أسهل تصفحاً
 /// في قبو متشعّب، وNVDA يعلن المستوى والتوسيع كأي شجرة ويندوز.

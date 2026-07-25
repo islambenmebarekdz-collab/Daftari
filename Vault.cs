@@ -356,6 +356,19 @@ public class Vault
         return dest;
     }
 
+    /// <summary>
+    /// يحفظ نصاً كملف جديد بجوار ملاحظة، باسم مشتق منها بلا تعارض.
+    /// يُستخدم لحفظ نسخة المستخدم عند تعارضها مع تعديل خارجي. يعيد المسار الجديد.
+    /// </summary>
+    public string SaveSideCopy(string notePath, string suffix, string content)
+    {
+        var dir = Path.GetDirectoryName(notePath)!;
+        var fileName = $"{Path.GetFileNameWithoutExtension(notePath)} {suffix}.md";
+        var dest = UniqueDestination(dir, Sanitize(fileName));
+        File.WriteAllText(dest, content, new UTF8Encoding(false));
+        return dest;
+    }
+
     /// <summary>عناصر مجلد المحذوفات (ملفات ومجلدات المستوى الأول).</summary>
     public IEnumerable<string> TrashItems()
     {
