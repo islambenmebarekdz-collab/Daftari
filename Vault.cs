@@ -55,9 +55,35 @@ public class Vault
         return false;
     }
 
+    /// <summary>
+    /// محتوى الملاحظات المقفلة التي فُتحت في هذه الجلسة، في الذاكرة فقط ولا يُكتب على القرص.
+    /// يجعلها تظهر في البحث والمهام والروابط ما دامت مفتوحة، وتختفي منها فور إقفال الجلسة.
+    /// </summary>
+    readonly Dictionary<string, string> unlockedContents = new(StringComparer.OrdinalIgnoreCase);
+
+    public void SetUnlockedContent(string path, string text) => unlockedContents[path] = text;
+    public void ForgetUnlockedContent(string path) => unlockedContents.Remove(path);
+    public void ForgetAllUnlocked() => unlockedContents.Clear();
+
     /// <summary>يمر على الملاحظات محدّثاً الفهرس: يقرأ من القرص الملفات المتغيرة فقط.</summary>
     IEnumerable<(string Path, CachedNote Note)> Indexed()
     {
+        // الملاحظات المقفلة المفتوحة في الجلسة تُفهرس من الذاكرة لا من القرص
+        foreach (var kv in unlockedContents)
+        {
+            if (!File.Exists(kv.Key)) continue;
+            var lines = kv.Value.Replace("\r\n", "\n").Split('\n');
+            yield return (kv.Key, new CachedNote
+            {
+                Stamp = DateTime.MinValue,
+                Lines = lines,
+                LinkTargets = lines.SelectMany(l => LinkRegex.Matches(l).Select(m => m.Groups[1].Value.Trim()))
+                                   .Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
+                Tags = lines.SelectMany(l => TagRegex.Matches(l).Select(m => m.Groups[1].Value))
+                            .Distinct().ToArray(),
+            });
+        }
+
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var p in AllNotes())
         {
@@ -536,6 +562,43 @@ public class Vault
         var fileName = $"{Path.GetFileNameWithoutExtension(notePath)} {suffix}.md";
         var dest = UniqueDestination(dir, Sanitize(fileName));
         File.WriteAllText(dest, content, new UTF8Encoding(false));
+        return dest;
+    }
+
+    /// <summary>الملاحظات مرتّبةً بالأحدث تعديلاً — لاستئناف العمل حيث توقّف.</summary>
+    public IEnumerable<string> RecentlyModified(int max = 30)
+    {
+        DateTime When(string p) { try { return File.GetLastWriteTimeUtc(p); } catch { return DateTime.MinValue; } }
+        return AllNotes().Concat(EncryptedNotes()).OrderByDescending(When).Take(max);
+    }
+
+    /// <summary>النسخ الاحتياطية المتاحة في مجلد النسخ، الأحدث أولاً.</summary>
+    public static IEnumerable<(string Path, DateTime When, long Size)> BackupsIn(string folder)
+    {
+        if (!Directory.Exists(folder)) yield break;
+        var items = new List<(string Path, DateTime When, long Size)>();
+        foreach (var f in Directory.EnumerateFiles(folder, "Daftari-*.zip"))
+        {
+            FileInfo info;
+            try { info = new FileInfo(f); } catch { continue; }
+            items.Add((f, info.LastWriteTime, info.Length));
+        }
+        foreach (var i in items.OrderByDescending(i => i.When)) yield return i;
+    }
+
+    /// <summary>
+    /// يفك ضغط نسخة احتياطية في مجلد جديد بجوار الوجهة المطلوبة — لا يكتب فوق قبو قائم أبداً.
+    /// يعيد مسار المجلد المستعاد.
+    /// </summary>
+    public static string RestoreBackupTo(string zipPath, string parentFolder, string name)
+    {
+        Directory.CreateDirectory(parentFolder);
+        var dest = Path.Combine(parentFolder, Sanitize(name));
+        int i = 2;
+        while (Directory.Exists(dest) || File.Exists(dest))
+            dest = Path.Combine(parentFolder, Sanitize($"{name} {i++}"));
+        Directory.CreateDirectory(dest);
+        System.IO.Compression.ZipFile.ExtractToDirectory(zipPath, dest);
         return dest;
     }
 

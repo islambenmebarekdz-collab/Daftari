@@ -34,6 +34,12 @@ public class MainForm : AppForm
     DateTime currentNoteStamp;
     bool resolvingConflict;
 
+    /// <summary>
+    /// تصير true بعد ظهور النافذة. قبلها تُتجاهل أحداث اختيار الشجرة، لأن TreeView
+    /// يختار أول عقدة تلقائياً عند إنشاء مقبضه فيفتح ملاحظة غير التي طلبها المستخدم.
+    /// </summary>
+    bool formReady;
+
     // سجل التراجع والإعادة: حقل النص القياسي يدعم خطوة واحدة فقط، فنحتفظ بسجل كامل بأنفسنا.
     // التعديلات المتتابعة خلال فترة قصيرة تُجمع في خطوة واحدة كي لا يتراجع المستخدم حرفاً حرفاً.
     readonly List<(string Text, int Caret)> undoStack = new();
@@ -68,6 +74,20 @@ public class MainForm : AppForm
         autosaveTimer.Start();
         // العودة إلى التطبيق بعد التحرير في برنامج آخر: أنسب لحظة لالتقاط التغيير
         Activated += (_, _) => RefreshIfChangedExternally();
+
+        // بعد ظهور النافذة: نثبّت الملاحظة المقصودة في الشجرة ونعيد موضع المؤشر،
+        // لأن كليهما قد يضيع أثناء إنشاء مقابض العناصر.
+        Shown += (_, _) =>
+        {
+            formReady = true;
+            if (currentNote == null || !File.Exists(currentNote)) return;
+            SelectNodeFor(currentNote);
+            if (settings.CaretPositions.TryGetValue(currentNote, out int saved))
+            {
+                editor.Select(Math.Clamp(saved, 0, editor.TextLength), 0);
+                editor.ScrollToCaret();
+            }
+        };
         countTimer.Tick += (_, _) => { countTimer.Stop(); UpdateCount(); };
         burstTimer.Tick += (_, _) => { burstTimer.Stop(); editBurst = false; };
 
@@ -96,6 +116,7 @@ public class MainForm : AppForm
 
         FormClosing += (_, _) =>
         {
+            RememberCaret();
             SaveCurrent();
             SyncTitleToFileName(false);
             settings.Save();
@@ -170,10 +191,14 @@ public class MainForm : AppForm
         // ونؤجل بالطابور حتى يُدرج القوس فعلاً في النص.
         editor.KeyPress += (_, e) =>
         {
-            if (e.KeyChar != '[' || !settings.LinkAutocomplete) return;
+            if (!settings.LinkAutocomplete) return;
             int caret = editor.SelectionStart;
-            if (caret >= 1 && caret <= editor.TextLength && editor.Text[caret - 1] == '[')
-                BeginInvoke(CompleteWikiLink);
+            if (caret < 1 || caret > editor.TextLength) return;
+            var before = editor.Text[caret - 1];
+
+            if (e.KeyChar == '[' && before == '[') BeginInvoke(CompleteWikiLink);
+            // وسم لا عنوان: الشرطة في أول السطر عنوان Markdown، أما بعد مسافة فهي وسم
+            else if (e.KeyChar == '#' && (before == ' ' || before == '\t' || before == '(')) BeginInvoke(CompleteTag);
         };
         editor.KeyDown += (_, e) =>
         {
@@ -272,6 +297,7 @@ public class MainForm : AppForm
         file.DropDownItems.Add(MI(L.T("حذف (نقل إلى المحذوفات)", "Delete (move to trash)"), Keys.None, (_, _) => DeleteSelected(), "Delete"));
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(MI(L.T("قفل الملاحظة بكلمة مرور...", "Lock note with a password..."), Keys.None, (_, _) => LockSelectedNote()));
+        file.DropDownItems.Add(MI(L.T("تغيير كلمة مرور الملاحظة...", "Change the note's password..."), Keys.None, (_, _) => ChangeNotePassword()));
         file.DropDownItems.Add(MI(L.T("إزالة القفل عن الملاحظة...", "Remove the note's lock..."), Keys.None, (_, _) => UnlockSelectedNote()));
         // Ctrl+Shift+L محجوز عالمياً لبرنامج آخر على بعض الأجهزة، فاستُبدل بمفتاح وظيفي
         file.DropDownItems.Add(MI(L.T("إقفال كل الملاحظات المفتوحة", "Lock all unlocked notes"), Keys.F8, (_, _) => LockAllSessions()));
@@ -279,7 +305,11 @@ public class MainForm : AppForm
         file.DropDownItems.Add(MI(L.T("حفظ", "Save"), Keys.Control | Keys.S, (_, _) => { SaveCurrent(announce: true); SyncTitleToFileName(true); }));
         file.DropDownItems.Add(MI(L.T("تحديث الشجرة", "Refresh tree"), Keys.F5, (_, _) => { LoadTree(); Announce(L.T("تم تحديث شجرة الملاحظات", "Notes tree refreshed")); }));
         file.DropDownItems.Add(new ToolStripSeparator());
+        file.DropDownItems.Add(MI(L.T("تصدير الملاحظة إلى HTML...", "Export note to HTML..."), Keys.None, (_, _) => ExportNoteHtml()));
+        file.DropDownItems.Add(MI(L.T("تصدير القبو كله إلى HTML...", "Export the whole vault to HTML..."), Keys.None, (_, _) => ExportVaultHtml()));
+        file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(MI(L.T("نسخة احتياطية الآن", "Back up now"), Keys.Control | Keys.Shift | Keys.B, (_, _) => BackupNow()));
+        file.DropDownItems.Add(MI(L.T("استعادة نسخة احتياطية...", "Restore a backup..."), Keys.None, (_, _) => RestoreBackup()));
         file.DropDownItems.Add(MI(L.T("الإعدادات...", "Settings..."), Keys.Control | Keys.Oemcomma, (_, _) => OpenSettings(), "Ctrl+,"));
         file.DropDownItems.Add(new ToolStripSeparator());
         file.DropDownItems.Add(MI(L.T("فتح قبو آخر...", "Open another vault..."), Keys.Control | Keys.O, (_, _) => ChooseVault()));
@@ -318,6 +348,9 @@ public class MainForm : AppForm
         nav.DropDownItems.Add(MI(L.T("فتح ملاحظة بسرعة...", "Quick open note..."), Keys.Control | Keys.P, (_, _) => QuickOpen()));
         nav.DropDownItems.Add(MI(L.T("الملاحظة السابقة", "Previous note"), Keys.None, (_, _) => ToggleLastNote(), "Ctrl+Tab"));
         nav.DropDownItems.Add(MI(L.T("الملاحظات الأخيرة...", "Recent notes..."), Keys.Control | Keys.R, (_, _) => ShowRecent()));
+        nav.DropDownItems.Add(MI(L.T("المعدّلة حديثاً...", "Recently modified..."), Keys.Control | Keys.Shift | Keys.R, (_, _) => ShowRecentlyModified()));
+        nav.DropDownItems.Add(MI(L.T("الملاحظات المثبّتة...", "Pinned notes..."), Keys.Control | Keys.Shift | Keys.P, (_, _) => ShowPinned()));
+        nav.DropDownItems.Add(MI(L.T("تثبيت الملاحظة أو إلغاء تثبيتها", "Pin or unpin the note"), Keys.None, (_, _) => TogglePinned()));
         nav.DropDownItems.Add(MI(L.T("أين أنا؟", "Where am I?"), Keys.Control | Keys.I, (_, _) => AnnounceWhereAmI()));
         nav.DropDownItems.Add(MI(L.T("اتباع الرابط عند المؤشر", "Follow link at caret"), Keys.Control | Keys.Enter, (_, _) => FollowLink()));
         nav.DropDownItems.Add(MI(L.T("الروابط الواردة...", "Backlinks..."), Keys.Control | Keys.B, (_, _) => ShowBacklinks()));
@@ -400,10 +433,14 @@ public class MainForm : AppForm
                 cm.Items.Add(Item(L.T("إعادة تسمية...", "Rename..."), RenameSelected));
                 cm.Items.Add(Item(L.T("نقل إلى...", "Move to..."), MoveSelected));
                 cm.Items.Add(Item(L.T("إظهار في مستكشف الملفات", "Show in File Explorer"), RevealSelected));
+                cm.Items.Add(Item(L.T("تثبيت أو إلغاء التثبيت", "Pin or unpin"), TogglePinned));
                 cm.Items.Add(new ToolStripSeparator());
-                cm.Items.Add(locked
-                    ? Item(L.T("إزالة القفل...", "Remove lock..."), UnlockSelectedNote)
-                    : Item(L.T("قفل بكلمة مرور...", "Lock with a password..."), LockSelectedNote));
+                if (locked)
+                {
+                    cm.Items.Add(Item(L.T("تغيير كلمة المرور...", "Change password..."), ChangeNotePassword));
+                    cm.Items.Add(Item(L.T("إزالة القفل...", "Remove lock..."), UnlockSelectedNote));
+                }
+                else cm.Items.Add(Item(L.T("قفل بكلمة مرور...", "Lock with a password..."), LockSelectedNote));
                 cm.Items.Add(new ToolStripSeparator());
                 cm.Items.Add(Item(L.T("حذف", "Delete"), DeleteSelected));
             }
@@ -586,6 +623,11 @@ public class MainForm : AppForm
 
     void Tree_AfterSelect(object? sender, TreeViewEventArgs e)
     {
+        // نفتح فقط حين يختار المستخدم بنفسه (بلوحة المفاتيح أو الفأرة).
+        // الاختيار البرمجي أو التلقائي عند إنشاء الشجرة يأتي بـ Unknown، وكان يخطف
+        // الملاحظة المفتوحة عند بدء التشغيل فيُفتح أول عنصر بدل آخر ملاحظة.
+        if (e.Action != TreeViewAction.ByKeyboard && e.Action != TreeViewAction.ByMouse) return;
+        if (!formReady) return;
         // الفتح من الشجرة صامت: NVDA يعلن عقدة الشجرة بنفسه،
         // وإعلاننا "فُتحت الملاحظة" كان يقاطعه فتبدو الأسهم معطلة.
         // والمقفلة لا تُفتح بمجرد المرور عليها كي لا تعترض نافذة كلمة المرور التنقل.
@@ -658,7 +700,12 @@ public class MainForm : AppForm
 
         if (sessionKeys.TryGetValue(path, out var known))
         {
-            try { text = NoteCrypto.Decrypt(data, known); return true; }
+            try
+            {
+                text = NoteCrypto.Decrypt(data, known);
+                vault.SetUnlockedContent(path, text);
+                return true;
+            }
             catch { sessionKeys.Remove(path); }   // مفتاح لم يعد صالحاً (تغيّر الملف مثلاً)
         }
 
@@ -674,6 +721,7 @@ public class MainForm : AppForm
             var key = NoteCrypto.DeriveKeyFor(data, password);
             text = NoteCrypto.Decrypt(data, key);
             sessionKeys[path] = key;
+            vault.SetUnlockedContent(path, text);   // تدخل البحث والمهام ما دامت مفتوحة
             return true;
         }
         catch (CryptographicException)
@@ -689,8 +737,19 @@ public class MainForm : AppForm
         }
     }
 
+    /// <summary>يحفظ موضع مؤشر الكتابة في الملاحظة الحالية للعودة إليه لاحقاً.</summary>
+    void RememberCaret()
+    {
+        if (currentNote == null || loading) return;
+        settings.CaretPositions[currentNote] = editor.SelectionStart;
+        if (settings.CaretPositions.Count > 200)
+            foreach (var stale in settings.CaretPositions.Keys.Where(k => !File.Exists(k)).Take(100).ToList())
+                settings.CaretPositions.Remove(stale);
+    }
+
     void OpenNote(string path, int line = -1, bool announceOpen = true, bool promptForPassword = true)
     {
+        RememberCaret();
         SaveCurrent();
         if (!File.Exists(path)) { Announce(L.T("الملف غير موجود", "File not found")); return; }
         if (!TryReadNote(path, out string text, promptForPassword)) return;
@@ -704,7 +763,10 @@ public class MainForm : AppForm
         ResetHistory();
         Text = $"{vault.DisplayName(path)} — {L.T("دفتري", "Daftari")}";
 
-        editor.SelectionStart = line >= 0 ? LineStartIndex(editor.Text, line) : 0;
+        // موضع المؤشر: السطر المطلوب، وإلا آخر موضع كنت فيه في هذه الملاحظة
+        editor.SelectionStart = line >= 0
+            ? LineStartIndex(editor.Text, line)
+            : settings.CaretPositions.TryGetValue(path, out int saved) ? Math.Clamp(saved, 0, editor.TextLength) : 0;
         editor.SelectionLength = 0;
         editor.ScrollToCaret();
 
@@ -1249,6 +1311,7 @@ public class MainForm : AppForm
         int n = sessionKeys.Count;
         foreach (var k in sessionKeys.Values) k.Wipe();
         sessionKeys.Clear();
+        vault.ForgetAllUnlocked();      // تخرج من البحث والمهام فوراً
 
         if (currentLocked)
         {
@@ -1444,6 +1507,33 @@ public class MainForm : AppForm
             FocusEditorFresh(L.T($"أُكمل الرابط إلى {name}", $"Link completed to {name}"));
         }
         else FocusEditorFresh();   // الإلغاء: نعيد التركيز فقط كي يواصل المستخدم الكتابة
+    }
+
+    /// <summary>يُستدعى بعد كتابة # وسط سطر فيعرض وسوم القبو لإكمال الوسم.</summary>
+    void CompleteTag()
+    {
+        if (currentNote == null) return;
+        int caret = editor.SelectionStart;
+        if (caret < 1 || caret > editor.TextLength || editor.Text[caret - 1] != '#') return;
+
+        SaveCurrent();
+        var tags = vault.AllTags();
+        if (tags.Count == 0) { Announce(L.T("لا توجد وسوم في القبو بعد", "No tags in the vault yet")); return; }
+
+        using var picker = new NotePickerForm(
+            L.T("إكمال الوسم", "Complete the tag"),
+            L.T("اكتب جزءاً من الوسم:", "Type part of the tag:"),
+            tags.Select(t => ($"{t.Key} ({t.Value.Count})", t.Key)),
+            allowCreate: true, insertMode: true);
+
+        string? tag = null;
+        if (picker.ShowDialog(this) == DialogResult.OK)
+            tag = picker.SelectedPath ?? picker.CreateName;
+        if (tag == null || tag.Length == 0) { FocusEditorFresh(); return; }
+
+        editor.Select(caret, 0);
+        editor.SelectedText = tag.TrimStart('#');
+        FocusEditorFresh(L.T($"أُكمل الوسم {tag}", $"Tag completed: {tag}"));
     }
 
     void InsertLink()
@@ -1934,6 +2024,69 @@ public class MainForm : AppForm
         editor.Focus();
     }
 
+    /// <summary>الملاحظات مرتّبةً بالأحدث تعديلاً — لاستئناف العمل حيث توقّف.</summary>
+    void ShowRecentlyModified()
+    {
+        SaveCurrent();
+        var notes = vault.RecentlyModified(30).ToList();
+        if (notes.Count == 0) { Announce(L.T("لا توجد ملاحظات", "No notes")); return; }
+        using var dlg = new ListPickForm(L.T("المعدّلة حديثاً", "Recently modified"),
+                                         L.T("قائمة الملاحظات بالأحدث تعديلاً", "Notes by last modified"));
+        foreach (var p in notes)
+        {
+            DateTime when;
+            try { when = File.GetLastWriteTime(p); } catch { when = DateTime.MinValue; }
+            var locked = NoteCrypto.IsEncrypted(p) ? L.T(" (مقفلة)", " (locked)") : "";
+            dlg.AddItem($"{vault.RelativeName(p)}{locked} — {when:yyyy-MM-dd HH:mm}", p);
+        }
+        if (dlg.ShowDialog(this) == DialogResult.OK && dlg.Result is string path)
+        {
+            OpenNote(path);
+            FocusEditorFresh();
+        }
+    }
+
+    /// <summary>يثبّت الملاحظة المحددة أو يلغي تثبيتها — وصول فوري إلى ملاحظاتك المحورية.</summary>
+    void TogglePinned()
+    {
+        string? path = tree.SelectedNode?.Tag as string ?? currentNote;
+        if (path == null || !File.Exists(path)) { Announce(L.T("لا توجد ملاحظة محددة", "No note selected")); return; }
+
+        if (settings.Pinned.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase)) > 0)
+            Announce(L.T($"أُلغي تثبيت {vault.DisplayName(path)}", $"Unpinned {vault.DisplayName(path)}"));
+        else
+        {
+            settings.Pinned.Add(path);
+            Announce(L.T($"ثُبّتت {vault.DisplayName(path)}", $"Pinned {vault.DisplayName(path)}"));
+        }
+        settings.Save();
+    }
+
+    void ShowPinned()
+    {
+        var pinned = settings.Pinned
+            .Where(p => File.Exists(p) && p.StartsWith(vault.Root, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (pinned.Count == 0)
+        {
+            Announce(L.T("لا توجد ملاحظات مثبّتة. ثبّت ملاحظة من قائمة انتقال أو قائمة السياق.",
+                         "No pinned notes. Pin one from the Navigate menu or the context menu."));
+            return;
+        }
+        using var dlg = new ListPickForm(L.T("الملاحظات المثبّتة", "Pinned notes"),
+                                         L.T("قائمة الملاحظات المثبّتة", "Pinned notes list"));
+        foreach (var p in pinned)
+        {
+            var locked = NoteCrypto.IsEncrypted(p) ? L.T(" (مقفلة)", " (locked)") : "";
+            dlg.AddItem(vault.RelativeName(p) + locked, p);
+        }
+        if (dlg.ShowDialog(this) == DialogResult.OK && dlg.Result is string path)
+        {
+            OpenNote(path);
+            FocusEditorFresh();
+        }
+    }
+
     void ShowRecent()
     {
         var recent = settings.RecentNotes
@@ -2070,8 +2223,24 @@ public class MainForm : AppForm
         SaveCurrent();
         var name = vault.DisplayName(currentNote);
 
+        var html = BuildNoteHtml(name, editor.Text);
+        try
+        {
+            var dir = Path.Combine(Path.GetTempPath(), "Daftari");
+            Directory.CreateDirectory(dir);
+            var file = Path.Combine(dir, Vault.Sanitize(name) + ".html");
+            File.WriteAllText(file, html, new UTF8Encoding(false));
+            Process.Start(new ProcessStartInfo(file) { UseShellExecute = true });
+            Announce(L.T("فُتحت المعاينة في المتصفح", "Preview opened in the browser"));
+        }
+        catch (Exception ex) { Msg(L.T("تعذر فتح المعاينة: ", "Could not open the preview: ") + ex.Message); }
+    }
+
+    /// <summary>يبني صفحة HTML كاملة من ملاحظة Markdown — تُستعمل للمعاينة وللتصدير.</summary>
+    static string BuildNoteHtml(string name, string markdown)
+    {
         // روابط الويكي ليست جزءاً من Markdown القياسي، فنعرضها كنص بارز
-        var md = Regex.Replace(editor.Text, @"\[\[([^\]\|#]+)(?:[#|][^\]]*)?\]\]", "**$1**");
+        var md = Regex.Replace(markdown, @"\[\[([^\]\|#]+)(?:[#|][^\]]*)?\]\]", "**$1**");
         // DisableHtml: وسوم HTML خام داخل الملاحظات تُعرض نصاً ولا تُنفذ —
         // يمنع حقن سكربتات من ملاحظة واردة من قبو شخص آخر
         var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().DisableHtml().Build();
@@ -2079,7 +2248,7 @@ public class MainForm : AppForm
 
         var dir1 = L.En ? "ltr" : "rtl";
         var lang = L.En ? "en" : "ar";
-        var html = $$"""
+        return $$"""
             <!DOCTYPE html>
             <html dir="{{dir1}}" lang="{{lang}}">
             <head>
@@ -2102,17 +2271,75 @@ public class MainForm : AppForm
             </body>
             </html>
             """;
+    }
 
+    /// <summary>يصدّر الملاحظة الحالية إلى ملف HTML يختاره المستخدم (يفتحه Word مباشرة).</summary>
+    void ExportNoteHtml()
+    {
+        if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
+        SaveCurrent();
+        var name = vault.DisplayName(currentNote);
+        using var dlg = new SaveFileDialog
+        {
+            Title = L.T("تصدير الملاحظة إلى HTML", "Export note to HTML"),
+            Filter = "HTML (*.html)|*.html",
+            FileName = Vault.Sanitize(name) + ".html",
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments)
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
         try
         {
-            var dir = Path.Combine(Path.GetTempPath(), "Daftari");
-            Directory.CreateDirectory(dir);
-            var file = Path.Combine(dir, Vault.Sanitize(name) + ".html");
-            File.WriteAllText(file, html, new UTF8Encoding(false));
-            Process.Start(new ProcessStartInfo(file) { UseShellExecute = true });
-            Announce(L.T("فُتحت المعاينة في المتصفح", "Preview opened in the browser"));
+            File.WriteAllText(dlg.FileName, BuildNoteHtml(name, editor.Text), new UTF8Encoding(false));
+            Announce(L.T($"صُدّرت الملاحظة إلى {Path.GetFileName(dlg.FileName)}",
+                         $"Exported to {Path.GetFileName(dlg.FileName)}"));
         }
-        catch (Exception ex) { Msg(L.T("تعذر فتح المعاينة: ", "Could not open the preview: ") + ex.Message); }
+        catch (Exception ex) { Msg(L.T("تعذّر التصدير: ", "Could not export: ") + ex.Message); }
+    }
+
+    /// <summary>يصدّر كل ملاحظات القبو إلى مجلد HTML مع صفحة فهرس تربطها.</summary>
+    void ExportVaultHtml()
+    {
+        SaveCurrent();
+        using var dlg = new FolderBrowserDialog
+        {
+            Description = L.T("اختر مجلداً لتصدير القبو إليه", "Choose a folder to export the vault into"),
+            UseDescriptionForTitle = true
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        var target = Path.Combine(dlg.SelectedPath,
+            Vault.Sanitize($"{Path.GetFileName(vault.Root)} HTML {DateTime.Now:yyyy-MM-dd HHmm}"));
+        int count = 0;
+        try
+        {
+            Directory.CreateDirectory(target);
+            var index = new StringBuilder();
+            foreach (var note in vault.AllNotes().OrderBy(p => vault.RelativeName(p), StringComparer.CurrentCultureIgnoreCase))
+            {
+                var noteName = vault.DisplayName(note);
+                var fileName = Vault.Sanitize(vault.RelativeName(note).Replace(Path.DirectorySeparatorChar, '-')) + ".html";
+                File.WriteAllText(Path.Combine(target, fileName),
+                                  BuildNoteHtml(noteName, File.ReadAllText(note)), new UTF8Encoding(false));
+                index.Append($"<li><a href=\"{WebUtility.HtmlEncode(Uri.EscapeDataString(fileName))}\">")
+                     .Append(WebUtility.HtmlEncode(vault.RelativeName(note)))
+                     .Append("</a></li>\n");
+                count++;
+            }
+            var indexTitle = L.T($"فهرس {Path.GetFileName(vault.Root)}", $"Index of {Path.GetFileName(vault.Root)}");
+            File.WriteAllText(Path.Combine(target, "index.html"),
+                BuildNoteHtml(indexTitle, $"# {indexTitle}\n\n") .Replace("</main>", $"<ul>\n{index}</ul>\n</main>"),
+                new UTF8Encoding(false));
+        }
+        catch (Exception ex) { Msg(L.T("تعذّر التصدير: ", "Could not export: ") + ex.Message); return; }
+
+        var open = MessageBox.Show(this,
+            L.T($"صُدّرت {count} ملاحظة إلى:\n{target}\n\nهل تفتح المجلد؟",
+                $"Exported {count} notes to:\n{target}\n\nOpen the folder?"),
+            L.T("تصدير القبو", "Export vault"), MessageBoxButtons.YesNo, MessageBoxIcon.Information,
+            MessageBoxDefaultButton.Button1, L.MsgOptions);
+        if (open == DialogResult.Yes)
+            try { Process.Start("explorer.exe", target); } catch { }
+        else Announce(L.T($"صُدّرت {count} ملاحظة", $"Exported {count} notes"));
     }
 
     /// <summary>
@@ -2348,6 +2575,95 @@ public class MainForm : AppForm
             CreateBackupZip();
         }
         catch { }
+    }
+
+    /// <summary>
+    /// يستعيد نسخة احتياطية إلى مجلد جديد بجوار القبو الحالي — لا يكتب فوق ملاحظاتك أبداً —
+    /// ثم يعرض فتح القبو المستعاد.
+    /// </summary>
+    void RestoreBackup()
+    {
+        if (string.IsNullOrWhiteSpace(settings.BackupFolder))
+        {
+            Msg(L.T("حدد مجلد النسخ الاحتياطي أولاً من الإعدادات.",
+                    "Set the backup folder in Settings first."));
+            return;
+        }
+        var backups = Vault.BackupsIn(settings.BackupFolder!).ToList();
+        if (backups.Count == 0)
+        {
+            Msg(L.T("لا توجد نسخ احتياطية في المجلد المحدد.", "No backups found in the chosen folder."));
+            return;
+        }
+
+        using var picker = new ListPickForm(L.T("استعادة نسخة احتياطية", "Restore a backup"),
+                                            L.T("اختر النسخة (الأحدث أولاً)", "Choose a backup (newest first)"));
+        foreach (var (path, when, size) in backups)
+            picker.AddItem(L.T($"{Path.GetFileNameWithoutExtension(path)} — {when:yyyy-MM-dd HH:mm} — {size / 1024 / 1024} ميغابايت",
+                               $"{Path.GetFileNameWithoutExtension(path)} — {when:yyyy-MM-dd HH:mm} — {size / 1024 / 1024} MB"),
+                            path);
+        if (picker.ShowDialog(this) != DialogResult.OK || picker.Result is not string zip) return;
+
+        var parent = Path.GetDirectoryName(vault.Root)!;
+        var name = L.T($"{Path.GetFileName(vault.Root)} مستعادة {DateTime.Now:yyyy-MM-dd HHmm}",
+                       $"{Path.GetFileName(vault.Root)} restored {DateTime.Now:yyyy-MM-dd HHmm}");
+        string restored;
+        try
+        {
+            SaveCurrent();
+            restored = Vault.RestoreBackupTo(zip, parent, name);
+        }
+        catch (Exception ex) { Msg(L.T("تعذّرت الاستعادة: ", "Could not restore: ") + ex.Message); return; }
+
+        var open = MessageBox.Show(this,
+            L.T($"استُعيدت النسخة في مجلد جديد بجوار قبوك الحالي:\n{restored}\n\nملاحظاتك الحالية لم تُمس.\nهل تفتح القبو المستعاد الآن؟",
+                $"The backup was restored into a new folder next to your current vault:\n{restored}\n\nYour current notes were not touched.\nOpen the restored vault now?"),
+            L.T("استعادة نسخة احتياطية", "Restore a backup"), MessageBoxButtons.YesNo, MessageBoxIcon.Information,
+            MessageBoxDefaultButton.Button1, L.MsgOptions);
+
+        if (open == DialogResult.Yes) OpenVault(restored);
+        else Announce(L.T($"استُعيدت النسخة في {Path.GetFileName(restored)}", $"Restored into {Path.GetFileName(restored)}"));
+    }
+
+    /// <summary>
+    /// يغيّر كلمة مرور ملاحظة مقفلة: يفك التشفير بالحالية ثم يعيده بمفتاح جديد،
+    /// ولا يكتب الملف إلا بعد التحقق من إمكانية فكّه بكلمة المرور الجديدة.
+    /// </summary>
+    void ChangeNotePassword()
+    {
+        string? path = tree.SelectedNode?.Tag as string ?? currentNote;
+        if (path == null || !File.Exists(path) || !NoteCrypto.IsEncrypted(path))
+        {
+            Announce(L.T("اختر ملاحظة مقفلة أولاً", "Select a locked note first"));
+            return;
+        }
+        if (string.Equals(path, currentNote, StringComparison.OrdinalIgnoreCase)) SaveCurrent();
+        if (!TryReadNote(path, out string text)) return;      // يطلب كلمة المرور الحالية إن لزم
+
+        using var dlg = new PasswordSetForm(vault.DisplayName(path));
+        dlg.Text = L.T($"كلمة مرور جديدة: {vault.DisplayName(path)}", $"New password: {vault.DisplayName(path)}");
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        try
+        {
+            var key = NoteCrypto.CreateKey(dlg.Password);
+            var blob = NoteCrypto.Encrypt(text, key);
+            // تحقق قاطع قبل الكتابة: لو أخفق شيء يبقى الملف القديم سليماً بكلمته القديمة
+            if (NoteCrypto.Decrypt(blob, NoteCrypto.DeriveKeyFor(blob, dlg.Password)) != text)
+                throw new CryptographicException("فشل التحقق");
+
+            File.WriteAllBytes(path, blob);
+            if (sessionKeys.Remove(path, out var old)) old.Wipe();
+            sessionKeys[path] = key;
+            if (string.Equals(path, currentNote, StringComparison.OrdinalIgnoreCase))
+                currentNoteStamp = StampOf(path);
+            Announce(L.T("تغيّرت كلمة مرور الملاحظة", "The note's password was changed"));
+        }
+        catch (Exception ex)
+        {
+            Msg(L.T("تعذّر تغيير كلمة المرور ولم تتغيّر ملاحظتك: ",
+                    "Could not change the password and your note is unchanged: ") + ex.Message);
+        }
     }
 
     void OpenSettings()

@@ -32,6 +32,10 @@ public class Settings
     public bool LinkAutocomplete { get; set; } = true;
     /// <summary>هل عُرض تحذير القفل بكلمة مرور مرة واحدة؟</summary>
     public bool EncryptionWarned { get; set; }
+    /// <summary>موضع مؤشر الكتابة في كل ملاحظة، للعودة إليه عند إعادة فتحها.</summary>
+    public Dictionary<string, int> CaretPositions { get; set; } = new();
+    /// <summary>ملاحظات مثبّتة للوصول الفوري إليها.</summary>
+    public List<string> Pinned { get; set; } = new();
 
     static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Daftari");
