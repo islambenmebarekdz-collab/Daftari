@@ -683,10 +683,14 @@ public class MainForm : AppForm
     /// بتعديل ملاحظة مقفلة (إنجاز مهمة، تحويل إشارة إلى رابط، تحديث روابط بعد إعادة تسمية).
     /// يعيد false إن لم يكن مفتاحها مفتوحاً، فلا يُكتب شيء ولا تتلف الملاحظة.
     /// </summary>
+    /// <remarks>
+    /// لا يحدّث <c>currentNoteStamp</c> عمداً حتى لو كانت الملاحظة مفتوحة في المحرر:
+    /// نريد أن يمر التعديل بكشف التغيّر الخارجي نفسه الذي يمر به تعديل الملاحظات العادية
+    /// (ShowTasks ← RefreshIfChangedExternally ← ReloadFromDisk)، فيُعاد تحميل المحرر
+    /// مفكوك التشفير بدل أن يبقى نصه قديماً فيُكتب فوق التعديل عند الحفظ التالي.
+    /// </remarks>
     bool WriteEncryptedNote(string path, string text)
     {
-        // لا نحدّث بصمة الملاحظة المفتوحة عمداً: يمر التعديل بكشف التغيّر الخارجي نفسه
-        // الذي يمر به تعديل الملاحظات العادية، فيُعاد تحميل المحرر بدل أن يبقى نصه قديماً.
         if (!sessionKeys.TryGetValue(path, out var key)) return false;
         try { File.WriteAllBytes(path, NoteCrypto.Encrypt(text, key)); return true; }
         catch { return false; }
