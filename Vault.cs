@@ -65,6 +65,43 @@ public class Vault
     public void ForgetUnlockedContent(string path) => unlockedContents.Remove(path);
     public void ForgetAllUnlocked() => unlockedContents.Clear();
 
+    /// <summary>
+    /// كاتب الملاحظات المقفلة، تركّبه الواجهة لأنها وحدها تملك مفاتيح الجلسة:
+    /// (المسار، النص الجديد) ← هل حُفظ مشفّراً؟ يبقى null إن لم تُفتح أي ملاحظة مقفلة.
+    /// وجوده شرطٌ لتعديل ملاحظة مقفلة، فلا يُكتب نص واضح فوق ملف مشفّر أبداً.
+    /// </summary>
+    public Func<string, string, bool>? EncryptedWriter { get; set; }
+
+    /// <summary>
+    /// نص ملاحظة بغرض التحرير: المقفلة تُقرأ من ذاكرة الجلسة لا من القرص
+    /// (وترفض إن لم تكن مفتوحة)، والعادية تُقرأ من ملفها.
+    /// </summary>
+    bool TryLoadForEdit(string path, out string text)
+    {
+        if (NoteCrypto.IsEncrypted(path))
+            return unlockedContents.TryGetValue(path, out text!);
+        try { text = File.ReadAllText(path); return true; }
+        catch { text = ""; return false; }
+    }
+
+    /// <summary>
+    /// يحفظ نصاً معدّلاً: المقفلة يعيد الكاتبُ تشفيرها ويُحدَّث نصها في الذاكرة،
+    /// والعادية تُكتب مباشرة. يعيد false دون أي كتابة إن تعذّر ذلك.
+    /// </summary>
+    bool TrySaveEdited(string path, string text)
+    {
+        if (NoteCrypto.IsEncrypted(path))
+        {
+            if (EncryptedWriter == null) return false;
+            bool ok;
+            try { ok = EncryptedWriter(path, text); } catch { return false; }
+            if (ok) unlockedContents[path] = text;
+            return ok;
+        }
+        try { File.WriteAllText(path, text, new UTF8Encoding(false)); return true; }
+        catch { return false; }
+    }
+
     /// <summary>يمر على الملاحظات محدّثاً الفهرس: يقرأ من القرص الملفات المتغيرة فقط.</summary>
     IEnumerable<(string Path, CachedNote Note)> Indexed()
     {
@@ -339,9 +376,8 @@ public class Vault
     /// </summary>
     public bool ConvertMentionToLink(string filePath, int lineNumber, string name)
     {
-        string[] lines;
-        try { lines = File.ReadAllText(filePath).Replace("\r\n", "\n").Split('\n'); }
-        catch { return false; }
+        if (!TryLoadForEdit(filePath, out var content)) return false;
+        var lines = content.Replace("\r\n", "\n").Split('\n');
         if (lineNumber < 0 || lineNumber >= lines.Length) return false;
 
         var line = lines[lineNumber];
@@ -350,12 +386,7 @@ public class Vault
         {
             if (linkSpans.Any(s => m.Index >= s.Index && m.Index < s.End)) continue; // داخل رابط قائم
             lines[lineNumber] = line[..m.Index] + "[[" + name + "]]" + line[(m.Index + name.Length)..];
-            try
-            {
-                File.WriteAllText(filePath, string.Join("\r\n", lines), new UTF8Encoding(false));
-                return true;
-            }
-            catch { return false; }
+            return TrySaveEdited(filePath, string.Join("\r\n", lines));
         }
         return false;
     }
@@ -512,20 +543,14 @@ public class Vault
     /// <summary>يضبط حالة مهمة في ملف على القرص مباشرة. يعيد false إن لم يكن السطر مهمة.</summary>
     public bool SetTaskDone(string filePath, int lineNumber, bool done)
     {
-        string[] lines;
-        try { lines = File.ReadAllText(filePath).Replace("\r\n", "\n").Split('\n'); }
-        catch { return false; }
+        if (!TryLoadForEdit(filePath, out var content)) return false;
+        var lines = content.Replace("\r\n", "\n").Split('\n');
         if (lineNumber < 0 || lineNumber >= lines.Length) return false;
 
         var m = TaskLine.Match(lines[lineNumber]);
         if (!m.Success) return false;
         lines[lineNumber] = $"{m.Groups[1].Value}{m.Groups[2].Value} [{(done ? "x" : " ")}] {m.Groups[4].Value}";
-        try
-        {
-            File.WriteAllText(filePath, string.Join("\r\n", lines), new UTF8Encoding(false));
-            return true;
-        }
-        catch { return false; }
+        return TrySaveEdited(filePath, string.Join("\r\n", lines));
     }
 
     /// <summary>
@@ -642,17 +667,11 @@ public class Vault
         {
             // الفهرس يحصر القراءة والكتابة في الملفات التي تشير إلى الاسم القديم فقط
             if (!note.LinkTargets.Contains(oldName, StringComparer.OrdinalIgnoreCase)) continue;
-            string text;
-            try { text = File.ReadAllText(p); } catch { continue; }
+            if (!TryLoadForEdit(p, out var text)) continue;
             int count = 0;
             var newText = rx.Replace(text, m => { count++; return $"[[{newName}{m.Groups[1].Value}]]"; });
             if (count == 0) continue;
-            try
-            {
-                File.WriteAllText(p, newText, new UTF8Encoding(false));
-                total += count;
-            }
-            catch { }
+            if (TrySaveEdited(p, newText)) total += count;
         }
         return total;
     }

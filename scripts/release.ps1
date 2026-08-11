@@ -40,6 +40,10 @@ Step 'تشغيل الاختبارات'
 dotnet test Daftari.sln -c Release --no-build --nologo
 if ($LASTEXITCODE -ne 0) { throw 'فشلت الاختبارات — أُوقف النشر' }
 
+Step 'بوابة تغطية طبقة المنطق'
+& (Join-Path $PSScriptRoot 'check-coverage.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'تراجعت تغطية طبقة المنطق — أُوقف النشر' }
+
 Step 'نشر النسخة المستقلة إلى dist\publish'
 dotnet publish Daftari.csproj -c Release -r win-x64 --self-contained true `
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `

@@ -476,6 +476,7 @@ public class MainForm : AppForm
     void OpenVault(string path)
     {
         vault = new Vault(path);
+        vault.EncryptedWriter = WriteEncryptedNote;
         settings.VaultPath = path;
         settings.Save();
         if (!vault.AllNotes().Any())
@@ -678,6 +679,20 @@ public class MainForm : AppForm
     readonly Dictionary<string, NoteKey> sessionKeys = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
+    /// يعيد كتابة ملاحظة مقفلة مشفّرةً بمفتاح جلستها — الطريق الوحيد الذي يسمح للقبو
+    /// بتعديل ملاحظة مقفلة (إنجاز مهمة، تحويل إشارة إلى رابط، تحديث روابط بعد إعادة تسمية).
+    /// يعيد false إن لم يكن مفتاحها مفتوحاً، فلا يُكتب شيء ولا تتلف الملاحظة.
+    /// </summary>
+    bool WriteEncryptedNote(string path, string text)
+    {
+        // لا نحدّث بصمة الملاحظة المفتوحة عمداً: يمر التعديل بكشف التغيّر الخارجي نفسه
+        // الذي يمر به تعديل الملاحظات العادية، فيُعاد تحميل المحرر بدل أن يبقى نصه قديماً.
+        if (!sessionKeys.TryGetValue(path, out var key)) return false;
+        try { File.WriteAllBytes(path, NoteCrypto.Encrypt(text, key)); return true; }
+        catch { return false; }
+    }
+
+    /// <summary>
     /// يقرأ نص ملاحظة، ويطلب كلمة المرور إن كانت مقفلة ولم يُفتح مفتاحها في هذه الجلسة.
     /// يعيد false إن ألغى المستخدم أو فشل فك التشفير، فلا تتغيّر حالة المحرر.
     /// </summary>
@@ -801,6 +816,8 @@ public class MainForm : AppForm
                     return;
                 }
                 File.WriteAllBytes(currentNote, NoteCrypto.Encrypt(editor.Text, key));
+                // نسخة الجلسة هي مصدر البحث والمهام لهذه الملاحظة، فتُحدَّث مع كل حفظ
+                vault.SetUnlockedContent(currentNote, editor.Text);
             }
             else File.WriteAllText(currentNote, editor.Text, new UTF8Encoding(false));
 
@@ -1240,6 +1257,7 @@ public class MainForm : AppForm
 
             File.Delete(path);             // حذف مباشر لا إلى السلة كي لا تبقى نسخة مقروءة
             sessionKeys[dest] = key;
+            vault.SetUnlockedContent(dest, text);   // مفتاحها بيدنا، فتبقى في البحث والمهام حتى إقفال الجلسة
         }
         catch (Exception ex)
         {
@@ -1285,6 +1303,7 @@ public class MainForm : AppForm
             File.WriteAllText(dest, text, new UTF8Encoding(false));
             File.Delete(path);
             if (sessionKeys.Remove(path, out var key)) key.Wipe();
+            vault.ForgetUnlockedContent(path);   // لم تعد مقفلة: تُفهرس من ملفها العادي
         }
         catch (Exception ex) { Msg(L.T("تعذّرت إزالة القفل: ", "Could not remove the lock: ") + ex.Message); return; }
 

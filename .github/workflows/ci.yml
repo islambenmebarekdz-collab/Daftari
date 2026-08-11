@@ -30,6 +30,11 @@ jobs:
       - name: Test
         run: dotnet test Daftari.sln -c Release --no-build --verbosity normal
 
+      # طبقة المنطق (Vault وNoteCrypto) يجب أن تبقى مغطاة بالفحوص؛ أي تراجع يُسقط البناء
+      - name: Logic-layer coverage gate
+        shell: pwsh
+        run: ./scripts/check-coverage.ps1 -Minimum 95
+
       # يتأكد أن النسخة المستقلة (التي يشير إليها اختصار المستخدم) ما زالت تُبنى
       - name: Verify self-contained publish
         run: dotnet publish Daftari.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o publish-check

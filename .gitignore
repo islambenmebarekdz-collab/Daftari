@@ -4,3 +4,10 @@ dist/
 publish-check/
 TestResults/
 *.user
+
+# أدوات محلية تُولَّد على جهاز المطوّر (فهرس Repowise وإعداداته) ولا تخص التطبيق
+.repowise/
+.mcp.json
+.vscode/
+.claude/
+AGENTS.md
