@@ -9,6 +9,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{699174FD
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Daftari.Tests", "tests\Daftari.Tests\Daftari.Tests.csproj", "{9D94BDCB-2F7E-446C-A041-0951722863C0}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tools", "tools", "{41B96F0E-EDCF-47EF-9FB1-87082F064C5B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Daftari.Cli", "tools\Daftari.Cli\Daftari.Cli.csproj", "{97405987-3738-422A-B7C3-5C8AE5BE5E13}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -26,8 +30,13 @@ Global
 		{9D94BDCB-2F7E-446C-A041-0951722863C0}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{9D94BDCB-2F7E-446C-A041-0951722863C0}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{9D94BDCB-2F7E-446C-A041-0951722863C0}.Release|Any CPU.Build.0 = Release|Any CPU
+		{97405987-3738-422A-B7C3-5C8AE5BE5E13}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{97405987-3738-422A-B7C3-5C8AE5BE5E13}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{97405987-3738-422A-B7C3-5C8AE5BE5E13}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{97405987-3738-422A-B7C3-5C8AE5BE5E13}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(NestedProjects) = preSolution
 		{9D94BDCB-2F7E-446C-A041-0951722863C0} = {699174FD-02BE-4C8F-B469-6227E7AA5FDA}
+		{97405987-3738-422A-B7C3-5C8AE5BE5E13} = {41B96F0E-EDCF-47EF-9FB1-87082F064C5B}
 	EndGlobalSection
 EndGlobal

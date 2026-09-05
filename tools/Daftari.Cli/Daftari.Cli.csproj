@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- يجب أن يختلف عن اسم تجميع التطبيق (Daftari) وإلا رفض NuGet الحلّ لتشابه الاسمين -->
+    <AssemblyName>daftari-cli</AssemblyName>
+    <RootNamespace>Daftari.Cli</RootNamespace>
+  </PropertyGroup>
+
+  <!-- يرجع إلى التطبيق نفسه ليشترك معه في Vault وNoteCrypto وSettings بلا نسخ منطق -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\Daftari.csproj" />
+  </ItemGroup>
+
+</Project>

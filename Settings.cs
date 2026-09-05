@@ -37,6 +37,18 @@ public class Settings
     /// <summary>ملاحظات مثبّتة للوصول الفوري إليها.</summary>
     public List<string> Pinned { get; set; } = new();
 
+    /// <summary>اسم مجلد القبو الافتراضي داخل «المستندات» عند أول تشغيل.</summary>
+    public const string DefaultVaultFolderName = "دفتري";
+
+    /// <summary>
+    /// مسار القبو الفعلي: المحفوظ إن كان ما يزال موجوداً، وإلا الافتراضي في «المستندات».
+    /// تشترك فيه الواجهة وأداة الطرفية ليعملا على القبو نفسه دائماً.
+    /// </summary>
+    public string ResolveVaultPath() =>
+        !string.IsNullOrWhiteSpace(VaultPath) && Directory.Exists(VaultPath)
+            ? VaultPath
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), DefaultVaultFolderName);
+
     static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Daftari");
     static string SettingsFile => Path.Combine(Dir, "settings.json");

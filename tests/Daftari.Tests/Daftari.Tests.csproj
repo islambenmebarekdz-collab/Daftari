@@ -11,6 +11,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\Daftari.csproj" />
+    <ProjectReference Include="..\..\tools\Daftari.Cli\Daftari.Cli.csproj" />
   </ItemGroup>
 
   <ItemGroup>
