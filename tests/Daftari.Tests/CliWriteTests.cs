@@ -205,6 +205,21 @@ public class CliWriteTests
     }
 
     [Fact]
+    public void قارئ_الدخل_يفكّ_UTF8_لا_ترميز_الطرفية_العربي()
+    {
+        const string arabic = "# ملاحظات على «دفتري» — تنتظر جلسة تحسين";
+        var bytes = new System.Text.UTF8Encoding(false).GetBytes(arabic);
+
+        using var stream = new MemoryStream(bytes);
+        var read = Commands.Utf8Reader(stream).ReadToEnd();
+
+        // فكُّ البايتات نفسها بترميز الطرفية العربي (CP720) يعطي نصّاً مشوّشاً؛
+        // كتب ذلك ملاحظةً كاملةً بحروفٍ معطوبة في قبوٍ حقيقي، فالفحص يحرس الفرق
+        Assert.Equal(arabic, read);
+        Assert.DoesNotContain("╪", read, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void لا_كتابة_خارج_القبو_مهما_كان_المسار()
     {
         using var t = new TempVault();

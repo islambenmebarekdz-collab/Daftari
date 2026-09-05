@@ -1,4 +1,5 @@
-﻿namespace Daftari.Cli;
+﻿using System.Text;
+namespace Daftari.Cli;
 
 /// <summary>
 /// تنفيذ أوامر الطرفية على قبوٍ مفتوح.
@@ -33,7 +34,7 @@ public static class Commands
     public const string BrokenLinkMark = "[مكسور]";
 
     public const string Usage = """
-        دفتري — واجهة نصّية للقراءة فقط على القبو
+        دفتري — واجهة نصّية على القبو: قراءةٌ وكتابةٌ محروسة
 
         الاستعمال: daftari [--vault <مسار>] <أمر> [وسائط]
 
@@ -241,6 +242,15 @@ public static class Commands
     /// أول ما تمرّره — ورأيتُها تدخل نصَّ ملاحظةٍ فعلاً — وهي أثرُ ترميزٍ لا محتوى،
     /// فتُزال أينما وقعت.
     /// </summary>
+    /// <summary>
+    /// قارئُ الدخل القياسي. يفكّ بـUTF-8 صراحةً ولا يتّكل على ترميز الطرفية:
+    /// <c>Console.In</c> يفكّ بترميز صفحة الرموز النشطة، وهي على جهازٍ عربي CP720،
+    /// فالنصّ العربي المُمرَّر يُفكّ خطأً ثم يُكتب مشوّشاً. كتب ذلك ملاحظةً كاملةً
+    /// بحروفٍ معطوبة في قبوٍ حقيقي — لا يُقرأ الدخل إلا من هنا.
+    /// </summary>
+    public static TextReader Utf8Reader(Stream stream) =>
+        new StreamReader(stream, new UTF8Encoding(false));
+
     /// <remarks>يُكتب المحرف بترميزه الصريح لا حرفياً: محرفٌ غير مرئيّ في المصدر يسقط
     /// عند الحفظ فيصير الاستبدال بلا أثر — وقع ذلك في فحصٍ هنا فعلاً.</remarks>
     static string ReadInput(TextReader? input) =>
