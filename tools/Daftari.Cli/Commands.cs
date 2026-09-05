@@ -36,6 +36,7 @@ public static class Commands
         الاستعمال: daftari [--vault <مسار>] <أمر> [وسائط]
 
           search <كلمات...>   بحثٌ مرجّح في المحتوى والعناوين والوسوم (كل الكلمات لازمة)
+                              --files يعطي الملاحظات وعدد مطابقاتها بلا أسطرها
           links <اسم>         الروابط الواردة إلى الملاحظة والصادرة منها
           index               كل الملاحظات بوقت آخر تعديل، الأحدث أولاً
           resolve <اسم>       يحلّ اسم رابط [[...]] إلى مسار ملف كامل
@@ -77,12 +78,34 @@ public static class Commands
     static string At(Vault vault, string path, int zeroBasedLine, string text) =>
         $"{vault.RelativeName(path)}:{zeroBasedLine + 1}: {text}";
 
-    static int Search(Vault vault, string[] terms, TextWriter output)
+    static int Search(Vault vault, string[] args, TextWriter output)
     {
+        bool filesOnly = args.Contains("--files");
+        var terms = args.Where(a => a != "--files").ToArray();
         if (terms.Length == 0) return Help(output, UsageError);
 
+        var hits = vault.Search(string.Join(' ', terms));
+
+        // بحثٌ واسع في قبوٍ حقيقي يُخرج آلاف الأحرف حين يعود كل سطرٍ مطابق كاملاً.
+        // ‎--files‎ يجيب أولاً عن «أيّ الملاحظات» فيُنزَل إلى واحدة بعدها — كما يفرّق
+        // grep بين ‎-l‎ وبحثه المعتاد. الترتيب هو ترتيب الترجيح نفسه، لأنّ مطابقات
+        // الملاحظة الواحدة تأتي متجاورة، فالظهور الأول يحفظ الرتبة.
+        if (filesOnly)
+        {
+            var perNote = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            var order = new List<string>();
+            foreach (var hit in hits)
+            {
+                if (!perNote.ContainsKey(hit.FilePath)) { perNote[hit.FilePath] = 0; order.Add(hit.FilePath); }
+                perNote[hit.FilePath]++;
+            }
+            foreach (var path in order)
+                output.WriteLine($"{perNote[path]}\t{vault.RelativeName(path)}");
+            return order.Count > 0 ? Found : NothingFound;
+        }
+
         int count = 0;
-        foreach (var hit in vault.Search(string.Join(' ', terms)))
+        foreach (var hit in hits)
         {
             output.WriteLine(At(vault, hit.FilePath, hit.LineNumber, hit.LineText));
             count++;

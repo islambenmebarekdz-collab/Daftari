@@ -45,6 +45,64 @@ public class CliTests
     }
 
     [Fact]
+    public void search_files_يعطي_سطراً_لكل_ملاحظة_بعدد_مطابقاتها()
+    {
+        using var t = new TempVault();
+        t.Note("كثيرة.md", "دافعية\nدافعية\nدافعية\n");
+        t.Note("قليلة.md", "دافعية مرة واحدة\n");
+
+        var (code, output) = Run(t, "search", "--files", "دافعية");
+
+        Assert.Equal(Commands.Found, code);
+        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal(2, lines.Length);                       // سطرٌ لكل ملاحظة لا لكل مطابقة
+        Assert.Contains("3\tكثيرة", lines[0] + lines[1]);
+        Assert.Contains("1\tقليلة", lines[0] + lines[1]);
+        Assert.DoesNotContain("دافعية مرة واحدة", output);   // بلا نصّ الأسطر
+    }
+
+    [Fact]
+    public void search_files_يحفظ_ترتيب_الترجيح()
+    {
+        using var t = new TempVault();
+        t.Note("ملاحظة طويلة.md", "دافعية\nدافعية\nدافعية\nدافعية\n");   // أربع مطابقات، بلا عنوان مطابق
+        t.Note("دافعية.md", "كلمة واحدة\n");                              // العنوان يطابق وحده
+
+        var (_, output) = Run(t, "search", "--files", "دافعية");
+
+        var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(l => l.TrimEnd('\r')).ToArray();
+        // ترجيح العنوان يسبق عدد المطابقات، فالمخرَج يحفظ رتبة Vault.Search لا يعيد ترتيبها
+        Assert.EndsWith("دافعية", lines[0]);
+        Assert.EndsWith("ملاحظة طويلة", lines[1]);
+    }
+
+    [Fact]
+    public void search_files_يُقبل_قبل_الكلمات_وبعدها()
+    {
+        using var t = new TempVault();
+        t.Note("ملاحظة.md", "دافعية الإنجاز\n");
+
+        var before = Run(t, "search", "--files", "دافعية");
+        var after = Run(t, "search", "دافعية", "--files");
+
+        Assert.Equal(before.Out, after.Out);
+        Assert.Equal(Commands.Found, after.Code);
+    }
+
+    [Fact]
+    public void search_files_بلا_نتائج_يعيد_رمز_لا_شيء()
+    {
+        using var t = new TempVault();
+        t.Note("ملاحظة.md", "نصّ عادي");
+
+        var (code, output) = Run(t, "search", "--files", "لا-وجود-له");
+
+        Assert.Equal(Commands.NothingFound, code);
+        Assert.Empty(output.Trim());
+    }
+
+    [Fact]
     public void search_بلا_نتائج_يعيد_رمز_لا_شيء()
     {
         using var t = new TempVault();
