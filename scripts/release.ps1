@@ -44,14 +44,20 @@ Step 'بوابة تغطية طبقة المنطق'
 & (Join-Path $PSScriptRoot 'check-coverage.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'تراجعت تغطية طبقة المنطق — أُوقف النشر' }
 
-# بلا EnableCompressionInSingleFile عمداً: الضغط الداخلي يوجب فكّ ضغط المكتبات الأصلية
-# عند أول تشغيل لكل بناء جديد، فيثقل أول فتحة بعد كل تحديث. وحزمة الإصدار zip تضغط
-# الملف أصلاً، فالضغط الداخلي يكرّر عملها بلا فائدة: قياساً، 63.2 م.ب بالضغط الداخلي
-# مقابل 62.8 م.ب بدونه. ثمنه الوحيد مساحة قرص محلية (155 م.ب بدل 69).
+# EnableCompressionInSingleFile يبقى. جُرّب إسقاطه في 5 سبتمبر 2026 ظناً أنه سبب ثقل
+# أول فتحة بعد كل تحديث، فأثبت القياس أنه ليس السبب:
+#
+#                        بارد (أول تشغيل)   دافئ
+#   بلا ضغط (155 م.ب)        2589 م.ث       574 · 594 · 525 م.ث
+#   بالضغط  (68.6 م.ب)       2757 م.ث       619 · 533 م.ث
+#
+# الدافئ متطابق، والبارد متساوٍ داخل ضجيج العيّنة. فثقلُ أول فتحة من فحص Defender
+# لملفٍّ لم يره قبلاً ومن قراءته من القرص أول مرة — لا من فكّ الضغط. وإسقاطه يكلّف
+# 86 م.ب قرصاً زائداً مقابل 0.4 م.ب فقط في حجم التحميل. فلا تُعِد المحاولة.
 Step 'نشر النسخة المستقلة إلى dist\publish'
 dotnet publish Daftari.csproj -c Release -r win-x64 --self-contained true `
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-    -o dist\publish --nologo
+    -p:EnableCompressionInSingleFile=true -o dist\publish --nologo
 if ($LASTEXITCODE -ne 0) { throw 'فشل النشر' }
 Remove-Item dist\publish\Daftari.pdb -Force -ErrorAction SilentlyContinue
 
