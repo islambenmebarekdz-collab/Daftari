@@ -31,6 +31,9 @@ static class Program
             return Commands.UsageError;
         }
 
-        return Commands.Run(new Vault(root), rest.ToArray(), Console.Out, Console.In);
+        // لا Console.In: هو يفكّ بترميز صفحة الرموز النشطة، وهي على جهازٍ عربي CP720،
+        // فيصير النصّ المُمرَّر حروفاً معطوبة تُكتب في القبو. القراءة من المجرى الخام بـUTF-8.
+        return Commands.Run(new Vault(root), rest.ToArray(), Console.Out,
+                            Commands.Utf8Reader(Console.OpenStandardInput()));
     }
 }
