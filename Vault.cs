@@ -300,9 +300,18 @@ public class Vault
         catch { }
     }
 
+    /// <summary>يوحّد الفاصل ليتطابق ما يُكتب بـ/ مع ما يُسجَّل بـ\.</summary>
+    static string NormalizeSeparators(string path) => path.Replace('/', '\\');
+
     /// <summary>
     /// أحداث السجلّ، الأحدث أولاً. <paramref name="name"/> يرشّح بمطابقة جزئية
-    /// في الطرف القديم أو الجديد. السطر التالف يُتجاوز ولا يُسقط قراءة بقيته.
+    /// في الطرف القديم أو الجديد.
+    ///
+    /// <para>ويطابق كذلك حدثَ مجلدٍ كان مساره بدايةَ المسار المسؤول عنه: إعادةُ
+    /// تسمية مجلد تغيّر المسار النسبي لكل ملاحظة تحته دون أن تُسجَّل أيٌّ منها،
+    /// فسطرُ المجلد وحده هو ما يجيب سؤالاً عن ملاحظةٍ كانت فيه.</para>
+    ///
+    /// <para>السطر التالف يُتجاوز ولا يُسقط قراءة بقيته.</para>
     /// </summary>
     public IReadOnlyList<VaultEvent> Renames(string? name = null)
     {
@@ -311,15 +320,21 @@ public class Vault
         catch { return Array.Empty<VaultEvent>(); }
 
         const DateTimeStyles Utc = DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal;
+        const StringComparison Cmp = StringComparison.OrdinalIgnoreCase;
+        var wanted = name == null ? null : NormalizeSeparators(name);
+
         var events = new List<VaultEvent>();
         foreach (var line in lines)
         {
             var f = line.Split('\t');
             if (f.Length != 5) continue;
             if (!DateTime.TryParse(f[0], CultureInfo.InvariantCulture, Utc, out var when)) continue;
-            if (name != null &&
-                !f[3].Contains(name, StringComparison.OrdinalIgnoreCase) &&
-                !f[4].Contains(name, StringComparison.OrdinalIgnoreCase)) continue;
+            if (wanted != null)
+            {
+                bool coversAsFolder = f[2] == "folder" &&
+                    wanted.StartsWith(NormalizeSeparators(f[3]) + '\\', Cmp);
+                if (!f[3].Contains(name!, Cmp) && !f[4].Contains(name!, Cmp) && !coversAsFolder) continue;
+            }
             events.Add(new VaultEvent(when, f[1], f[2], f[3], f[4]));
         }
         events.Reverse();

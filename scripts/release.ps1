@@ -44,10 +44,14 @@ Step 'بوابة تغطية طبقة المنطق'
 & (Join-Path $PSScriptRoot 'check-coverage.ps1')
 if ($LASTEXITCODE -ne 0) { throw 'تراجعت تغطية طبقة المنطق — أُوقف النشر' }
 
+# بلا EnableCompressionInSingleFile عمداً: الضغط الداخلي يوجب فكّ ضغط المكتبات الأصلية
+# عند أول تشغيل لكل بناء جديد، فيثقل أول فتحة بعد كل تحديث. وحزمة الإصدار zip تضغط
+# الملف أصلاً، فالضغط الداخلي يكرّر عملها بلا فائدة: قياساً، 63.2 م.ب بالضغط الداخلي
+# مقابل 62.8 م.ب بدونه. ثمنه الوحيد مساحة قرص محلية (155 م.ب بدل 69).
 Step 'نشر النسخة المستقلة إلى dist\publish'
 dotnet publish Daftari.csproj -c Release -r win-x64 --self-contained true `
     -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true `
-    -p:EnableCompressionInSingleFile=true -o dist\publish --nologo
+    -o dist\publish --nologo
 if ($LASTEXITCODE -ne 0) { throw 'فشل النشر' }
 Remove-Item dist\publish\Daftari.pdb -Force -ErrorAction SilentlyContinue
 

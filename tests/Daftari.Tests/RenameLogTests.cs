@@ -115,6 +115,32 @@ public class RenameLogTests
     }
 
     [Fact]
+    public void سؤال_عن_ملاحظة_داخل_مجلد_أُعيدت_تسميته_يجيبه_حدث_المجلد()
+    {
+        using var t = new TempVault();
+        t.Note("مجلد قديم/ملاحظة.md", "محتوى");
+        RenameOnDisk(t, Path.Combine(t.Root, "مجلد قديم"), "مجلد جديد");
+
+        // الملاحظة نفسها لم تُسجَّل — سطرٌ واحد للمجلد يغطّي كل ما تحته
+        var e = Assert.Single(t.Vault.Renames("مجلد قديم/ملاحظة"));
+        Assert.Equal("folder", e.ItemType);
+        Assert.Equal("مجلد قديم", e.From);
+        Assert.Equal("مجلد جديد", e.To);
+
+        Assert.Single(t.Vault.Renames(@"مجلد قديم\ملاحظة"));   // الفاصل الآخر يطابق أيضاً
+    }
+
+    [Fact]
+    public void المطابقة_بالسابقة_لا_تتعدى_إلى_أحداث_الملاحظات()
+    {
+        using var t = new TempVault();
+        RenameOnDisk(t, t.Note("ملاحظة.md"), "ملاحظة معدّلة");
+
+        // «ملاحظة» ليست مجلداً، فلا يجوز أن يطابقها سؤالٌ عن مسارٍ يبدأ باسمها
+        Assert.Empty(t.Vault.Renames("ملاحظة/شيء تحتها"));
+    }
+
+    [Fact]
     public void سطر_تالف_في_السجلّ_لا_يُسقط_قراءة_بقيته()
     {
         using var t = new TempVault();
