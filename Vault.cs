@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -7,6 +8,13 @@ public record SearchHit(string FilePath, int LineNumber, string LineText);
 
 /// <summary>مهمة داخل ملاحظة: سطر بصيغة قائمة مهام في Markdown.</summary>
 public record TaskItem(string FilePath, int LineNumber, string Text, bool Done);
+
+/// <summary>
+/// حدثٌ في تاريخ القبو أتلف معلومةً لا تُستدرك من حالته الراهنة.
+/// <c>Kind</c>: "rename" أو "trash". <c>ItemType</c>: "note" أو "folder".
+/// <c>From</c> و<c>To</c> مساران نسبيان بلا امتداد. <c>When</c> بتوقيت UTC.
+/// </summary>
+public record VaultEvent(DateTime When, string Kind, string ItemType, string From, string To);
 
 /// <summary>
 /// القبو: مجلد على القرص يحتوي ملفات Markdown. متوافق مع قبو Obsidian.
@@ -20,6 +28,16 @@ public class Vault
     public string TrashPath => Path.Combine(Root, TrashFolderName);
     public const string TemplatesFolderName = "قوالب";
     public string TemplatesPath => Path.Combine(Root, TemplatesFolderName);
+
+    /// <summary>
+    /// مجلد بيانات القبو. يبدأ بنقطة فيستبعده <see cref="IsExcluded"/> من الفهرس والبحث
+    /// والشجرة، ولا يراه Obsidian — كما يفعل مجلد ‎.obsidian‎ تماماً. ويسافر مع القبو
+    /// في النسخ الاحتياطية والمزامنة السحابية، لأنه يصف هذا القبو وحده.
+    /// </summary>
+    public const string MetaFolderName = ".daftari";
+    public const string RenameLogName = "renames.log";
+    string MetaPath => Path.Combine(Root, MetaFolderName);
+    string RenameLogPath => Path.Combine(MetaPath, RenameLogName);
 
     static readonly Regex LinkRegex = new(@"\[\[([^\]\|#]+)([#|][^\]]*)?\]\]", RegexOptions.Compiled);
     static readonly Regex TagRegex = new(@"(?<=^|[\s(])#([\p{L}\p{N}_\-/]+)", RegexOptions.Compiled);
@@ -247,8 +265,65 @@ public class Vault
     {
         Directory.CreateDirectory(TrashPath);
         var dest = UniqueDestination(TrashPath, Path.GetFileName(path));
+        bool isFolder = Directory.Exists(path);      // يُقرأ قبل النقل، فبعده لم يعد المصدر موجوداً
         MovePath(path, dest);
+        Append("trash", isFolder, path, dest);
         return dest;
+    }
+
+    // ---------- سجلّ القبو ----------
+
+    /// <summary>
+    /// يسجّل إعادة تسمية وقعت للتوّ. تناديه الواجهة بعد نقلٍ ناجح، لأنّ إعادة التسمية
+    /// تجري فيها لا هنا. يُقرأ نوع العنصر من الوجهة لأنّ المصدر لم يعد موجوداً.
+    /// </summary>
+    public void RecordRename(string oldPath, string newPath) =>
+        Append("rename", Directory.Exists(newPath), oldPath, newPath);
+
+    /// <summary>
+    /// يُلحق سطراً بالسجلّ. يبتلع كل خطأ عمداً: وقوعُ الحدث أهمّ من تسجيله،
+    /// فلا يجوز أن تفشل إعادة تسمية أو حذفٌ نجحا لأنّ القرص رفض سطر سجلّ.
+    /// </summary>
+    void Append(string kind, bool isFolder, string fromPath, string toPath)
+    {
+        try
+        {
+            Directory.CreateDirectory(MetaPath);
+            var line = string.Join('\t',
+                DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
+                kind,
+                isFolder ? "folder" : "note",
+                RelativeName(fromPath),
+                RelativeName(toPath));
+            File.AppendAllText(RenameLogPath, line + "\n", new UTF8Encoding(false));
+        }
+        catch { }
+    }
+
+    /// <summary>
+    /// أحداث السجلّ، الأحدث أولاً. <paramref name="name"/> يرشّح بمطابقة جزئية
+    /// في الطرف القديم أو الجديد. السطر التالف يُتجاوز ولا يُسقط قراءة بقيته.
+    /// </summary>
+    public IReadOnlyList<VaultEvent> Renames(string? name = null)
+    {
+        string[] lines;
+        try { lines = File.Exists(RenameLogPath) ? File.ReadAllLines(RenameLogPath) : Array.Empty<string>(); }
+        catch { return Array.Empty<VaultEvent>(); }
+
+        const DateTimeStyles Utc = DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal;
+        var events = new List<VaultEvent>();
+        foreach (var line in lines)
+        {
+            var f = line.Split('\t');
+            if (f.Length != 5) continue;
+            if (!DateTime.TryParse(f[0], CultureInfo.InvariantCulture, Utc, out var when)) continue;
+            if (name != null &&
+                !f[3].Contains(name, StringComparison.OrdinalIgnoreCase) &&
+                !f[4].Contains(name, StringComparison.OrdinalIgnoreCase)) continue;
+            events.Add(new VaultEvent(when, f[1], f[2], f[3], f[4]));
+        }
+        events.Reverse();
+        return events;
     }
 
     /// <summary>
@@ -458,7 +533,12 @@ public class Vault
     {
         Directory.CreateDirectory(destFolder);
         var dest = UniqueDestination(destFolder, Path.GetFileName(source));
+        bool isFolder = Directory.Exists(source);
         MovePath(source, dest);
+        // النقل يُبقي الاسم عادةً فلا يُتلف شيئاً ولا يُسجَّل. لكنّه عند تعارض الأسماء
+        // يضيف لاحقة رقمية — إعادةُ تسمية صامتة تكسر الحلّ بالاسم، فتُسجَّل.
+        if (!string.Equals(Path.GetFileName(source), Path.GetFileName(dest), StringComparison.Ordinal))
+            Append("rename", isFolder, source, dest);
         return dest;
     }
 

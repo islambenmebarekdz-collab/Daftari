@@ -1056,6 +1056,8 @@ public class MainForm : AppForm
         }
         catch (Exception ex) { Msg(L.T("تعذرت إعادة التسمية: ", "Could not rename: ") + ex.Message); return; }
 
+        vault.RecordRename(path, dest);
+
         if (currentNote != null)
         {
             if (isFile && string.Equals(currentNote, path, StringComparison.OrdinalIgnoreCase))
@@ -1163,7 +1165,11 @@ public class MainForm : AppForm
         try
         {
             SaveCurrent();                                  // ضمان كتابة المحتوى قبل النقل
+            var oldPath = currentNote;
             File.Move(currentNote, dest);
+            // هذه التسمية تقع بلا قصدٍ من المستخدم — تعديلُ سطر العنوان وحده يُطلقها —
+            // فتسجيلها أهمّ ما في السجلّ: الاسم يتغيّر ولا شيء يعلن ذلك للاحقاً
+            vault.RecordRename(oldPath, dest);
             currentNote = dest;
             currentNoteStamp = StampOf(dest);
 

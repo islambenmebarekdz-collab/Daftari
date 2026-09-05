@@ -42,6 +42,7 @@ public static class Commands
           show <اسم>          يطبع محتوى الملاحظة باسم رابطها
           tasks [--all]       المهام غير المنجزة في القبو كله (--all يشمل المنجزة)
           tags                الوسوم وملاحظات كل وسم
+          renames [اسم]       سجلّ إعادة التسمية والحذف، الأحدث أولاً
 
         رموز الخروج: 0 وُجد، 1 لا شيء، 2 خطأ استعمال
         """;
@@ -60,6 +61,7 @@ public static class Commands
             "show" => Show(vault, rest, output),
             "tasks" => Tasks(vault, rest, output),
             "tags" => Tags(vault, output),
+            "renames" => Renames(vault, rest, output),
             "help" or "--help" or "-h" => Help(output),
             _ => Help(output, UsageError),
         };
@@ -172,6 +174,18 @@ public static class Commands
             count++;
         }
         return count > 0 ? Found : NothingFound;
+    }
+
+    /// <summary>
+    /// سجلّ الأحداث التي أتلفت معلومة: إعادة تسمية وحذف. حين يفشل <c>resolve</c> على
+    /// اسمٍ أعرفه، هذا الأمر يقول أين ذهب بدل الاستدلال عليه بالبحث.
+    /// </summary>
+    static int Renames(Vault vault, string[] args, TextWriter output)
+    {
+        var events = vault.Renames(args.Length > 0 ? string.Join(' ', args) : null);
+        foreach (var e in events)
+            output.WriteLine($"{e.When.ToLocalTime():yyyy-MM-dd HH:mm}\t{e.Kind}\t{e.ItemType}\t{e.From} ← {e.To}");
+        return events.Count > 0 ? Found : NothingFound;
     }
 
     static int Tags(Vault vault, TextWriter output)

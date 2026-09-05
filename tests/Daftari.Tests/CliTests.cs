@@ -207,6 +207,35 @@ public class CliTests
     }
 
     [Fact]
+    public void renames_يعرض_السجلّ_ويرشّحه_بالاسم()
+    {
+        using var t = new TempVault();
+        var path = t.Note("اسم قديم.md", "محتوى");
+        var dest = Path.Combine(t.Root, "اسم جديد.md");
+        File.Move(path, dest);
+        t.Vault.RecordRename(path, dest);
+
+        var (code, output) = Run(t, "renames");
+        Assert.Equal(Commands.Found, code);
+        Assert.Contains("اسم قديم ← اسم جديد", output);
+        Assert.Contains("rename", output);
+
+        Assert.Equal(Commands.Found, Run(t, "renames", "اسم", "قديم").Code);
+        Assert.Equal(Commands.NothingFound, Run(t, "renames", "لا وجود له").Code);
+    }
+
+    [Fact]
+    public void renames_بسجلّ_فارغ_يعيد_رمز_لا_شيء()
+    {
+        using var t = new TempVault();
+
+        var (code, output) = Run(t, "renames");
+
+        Assert.Equal(Commands.NothingFound, code);
+        Assert.Empty(output.Trim());
+    }
+
+    [Fact]
     public void أمر_مجهول_يعيد_خطأ_استعمال_مع_قائمة_الأوامر()
     {
         using var t = new TempVault();
@@ -240,6 +269,7 @@ public class CliTests
         {
             new[] { "search", "عنوان" }, new[] { "links", "ملاحظة" }, new[] { "index" },
             new[] { "resolve", "ملاحظة" }, new[] { "show", "ملاحظة" }, new[] { "tasks" }, new[] { "tags" },
+            new[] { "renames" },
         })
             Run(t, args);
 
