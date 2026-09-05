@@ -67,7 +67,7 @@ public class MainForm : AppForm
 
         BuildMenu();
         BuildLayout();
-        OpenVault(ResolveVaultPath());
+        OpenVault(settings.ResolveVaultPath());
 
         // الحفظ الدوري، أو التقاط أي تعديل خارجي حين لا توجد تعديلات محلية
         autosaveTimer.Tick += (_, _) => { if (dirty) SaveCurrent(); else RefreshIfChangedExternally(); };
@@ -332,6 +332,7 @@ public class MainForm : AppForm
         edit.DropDownItems.Add(MI(L.T("مهمة: إنشاء أو تبديل الإنجاز", "Task: create or toggle done"), Keys.F4, (_, _) => ToggleTaskAtCaret()));
         edit.DropDownItems.Add(MI(L.T("إدراج التاريخ والوقت", "Insert date and time"), Keys.Control | Keys.Shift | Keys.T, (_, _) => InsertTimestamp()));
         edit.DropDownItems.Add(MI(L.T("نسخ الملاحظة كاملة", "Copy entire note"), Keys.Control | Keys.Shift | Keys.C, (_, _) => CopyNote()));
+        edit.DropDownItems.Add(MI(L.T("نسخ مسار الملف", "Copy file path"), Keys.Control | Keys.Shift | Keys.U, (_, _) => CopySelectedPath()));
         edit.DropDownItems.Add(MI(L.T("معاينة HTML في المتصفح", "HTML preview in browser"), Keys.Control | Keys.Shift | Keys.H, (_, _) => PreviewHtml()));
 
         var view = new ToolStripMenuItem(L.T("&عرض", "&View"));
@@ -433,6 +434,7 @@ public class MainForm : AppForm
                 cm.Items.Add(Item(L.T("إعادة تسمية...", "Rename..."), RenameSelected));
                 cm.Items.Add(Item(L.T("نقل إلى...", "Move to..."), MoveSelected));
                 cm.Items.Add(Item(L.T("إظهار في مستكشف الملفات", "Show in File Explorer"), RevealSelected));
+                cm.Items.Add(Item(L.T("نسخ مسار الملف", "Copy file path"), CopySelectedPath));
                 cm.Items.Add(Item(L.T("تثبيت أو إلغاء التثبيت", "Pin or unpin"), TogglePinned));
                 cm.Items.Add(new ToolStripSeparator());
                 if (locked)
@@ -451,6 +453,7 @@ public class MainForm : AppForm
                 cm.Items.Add(new ToolStripSeparator());
                 cm.Items.Add(Item(L.T("مشاركة كـ zip...", "Share as zip..."), () => ShareFolderZip(path)));
                 cm.Items.Add(Item(L.T("إظهار في مستكشف الملفات", "Show in File Explorer"), RevealSelected));
+                cm.Items.Add(Item(L.T("نسخ مسار المجلد", "Copy folder path"), CopySelectedPath));
                 if (!isRoot)
                 {
                     cm.Items.Add(Item(L.T("إعادة تسمية...", "Rename..."), RenameSelected));
@@ -465,13 +468,6 @@ public class MainForm : AppForm
     }
 
     // ---------- القبو والشجرة ----------
-
-    string ResolveVaultPath()
-    {
-        if (!string.IsNullOrWhiteSpace(settings.VaultPath) && Directory.Exists(settings.VaultPath))
-            return settings.VaultPath;
-        return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "دفتري");
-    }
 
     void OpenVault(string path)
     {
@@ -1408,6 +1404,28 @@ public class MainForm : AppForm
         }
         try { Process.Start("explorer.exe", $"/select,\"{path}\""); }
         catch (Exception ex) { Msg(L.T("تعذّر الفتح: ", "Could not open: ") + ex.Message); }
+    }
+
+    /// <summary>
+    /// ينسخ المسار الكامل للعنصر المحدد إلى الحافظة، فلا حاجة للمرور بمستكشف الملفات.
+    /// يعلن الاسم وحده لا المسار كاملاً، لأنّ NVDA يقرأ المسارات الطويلة قراءةً مرهقة —
+    /// والمنسوخ هو المسار الكامل على كل حال.
+    /// </summary>
+    void CopySelectedPath()
+    {
+        string? path = tree.SelectedNode?.Tag as string ?? currentNote;
+        if (path == null || (!File.Exists(path) && !Directory.Exists(path)))
+        {
+            Announce(L.T("لا يوجد عنصر محدد", "Nothing selected"));
+            return;
+        }
+        try
+        {
+            Clipboard.SetText(path);
+            var name = Path.GetFileName(path);
+            Announce(L.T($"نُسخ مسار {name} إلى الحافظة", $"Copied the path of {name} to the clipboard"));
+        }
+        catch { Announce(L.T("تعذر النسخ إلى الحافظة، أعد المحاولة", "Could not copy to the clipboard, try again")); }
     }
 
     void OpenTrash()
@@ -2963,6 +2981,7 @@ Ctrl+Shift+K — إدراج كتلة كود برمجي (يكتب الأسوار 
 وإن كان هناك نص محدد يلفّه داخل الكتلة مباشرة)
 Ctrl+Shift+T — إدراج التاريخ والوقت الحاليين
 Ctrl+Shift+C — نسخ الملاحظة كاملة إلى الحافظة
+Ctrl+Shift+U — نسخ مسار الملف أو المجلد المحدد إلى الحافظة
 Ctrl+Shift+H — فتح الملاحظة بصيغة HTML في المتصفح
 (في المتصفح يقرأ NVDA العناوين والقوائم دلالياً بدون رموز،
 وكل قسم قابل للطي والتوسيع بضغط Enter على عنوانه؛
@@ -3068,6 +3087,7 @@ Ctrl+Shift+K — insert a code block (writes the ``` fences itself,
 and wraps the selection if text is selected)
 Ctrl+Shift+T — insert current date and time
 Ctrl+Shift+C — copy the entire note
+Ctrl+Shift+U — copy the selected file or folder path
 Ctrl+Shift+H — open the note as HTML in the browser
 (NVDA reads headings and lists semantically there,
 each section collapses and expands with Enter on its heading;
