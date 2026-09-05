@@ -27,6 +27,11 @@ public class Vault
     sealed class CachedNote
     {
         public DateTime Stamp;
+        /// <summary>
+        /// الحجم جزءٌ من مفتاح الإبطال مع الطابع: محرّر خارجي قد يكتب ويعيد الطابع
+        /// كما كان، أو تقع كتابتان داخل تكّة الطابع نفسها، فيبقى الطابع وحده كاذباً.
+        /// </summary>
+        public long Size;
         public string[] Lines = Array.Empty<string>();
         public string[] LinkTargets = Array.Empty<string>();
         public string[] Tags = Array.Empty<string>();
@@ -98,9 +103,17 @@ public class Vault
             if (ok) unlockedContents[path] = text;
             return ok;
         }
-        try { File.WriteAllText(path, text, new UTF8Encoding(false)); return true; }
+        try { File.WriteAllText(path, text, new UTF8Encoding(false)); Forget(path); return true; }
         catch { return false; }
     }
+
+    /// <summary>
+    /// يُسقط ملفاً من الفهرس بعد أن يكتبه القبو بنفسه. لازمٌ لأنّ مفتاح الإبطال
+    /// (الطابع والحجم) قد لا يتغيّر أصلاً: تعليمُ مهمة منجزة يبدّل «[ ]» بـ«[x]»
+    /// فيبقى الطول واحداً، وقد تقع الكتابة داخل تكّة الطابع نفسها. فما كتبه القبو
+    /// لا يثق بنسخته المحفوظة عنه.
+    /// </summary>
+    void Forget(string path) => cache.Remove(path);
 
     /// <summary>يمر على الملاحظات محدّثاً الفهرس: يقرأ من القرص الملفات المتغيرة فقط.</summary>
     IEnumerable<(string Path, CachedNote Note)> Indexed()
@@ -125,15 +138,17 @@ public class Vault
         foreach (var p in AllNotes())
         {
             seen.Add(p);
-            DateTime stamp;
-            try { stamp = File.GetLastWriteTimeUtc(p); } catch { continue; }
-            if (!cache.TryGetValue(p, out var note) || note.Stamp != stamp)
+            DateTime stamp; long size;
+            try { var info = new FileInfo(p); stamp = info.LastWriteTimeUtc; size = info.Length; }
+            catch { continue; }
+            if (!cache.TryGetValue(p, out var note) || note.Stamp != stamp || note.Size != size)
             {
                 string[] lines;
                 try { lines = File.ReadAllLines(p); } catch { continue; }
                 note = new CachedNote
                 {
                     Stamp = stamp,
+                    Size = size,
                     Lines = lines,
                     LinkTargets = lines
                         .SelectMany(l => LinkRegex.Matches(l).Select(m => m.Groups[1].Value.Trim()))
