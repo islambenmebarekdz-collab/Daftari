@@ -205,6 +205,69 @@ public class CliWriteTests
     }
 
     [Fact]
+    public void new_ينبّه_إن_كان_العنوان_يخالف_اسم_الملف()
+    {
+        using var t = new TempVault();
+
+        var (_, output) = Run(t, "# عنوانٌ آخر\nمحتوى", "new", "اسم الملف");
+
+        Assert.Contains("السطر الأول: # عنوانٌ آخر", output);
+        Assert.Contains("سيعيد التطبيق تسميته إلى «عنوانٌ آخر»", output);
+    }
+
+    [Fact]
+    public void new_لا_ينبّه_إن_طابق_العنوان_اسم_الملف()
+    {
+        using var t = new TempVault();
+
+        var (_, output) = Run(t, "# مطابق\nمحتوى", "new", "مطابق");
+
+        Assert.Contains("السطر الأول: # مطابق", output);
+        Assert.DoesNotContain("سيعيد التطبيق تسميته", output);
+    }
+
+    [Fact]
+    public void edit_على_السطر_الأول_ينبّه_من_إعادة_التسمية_المرتقبة()
+    {
+        using var t = new TempVault();
+        t.Note("ملاحظة.md", "# ملاحظة\nمحتوى\n");
+
+        var (_, output) = Run(t, "# عنوانٌ جديد", "edit", "ملاحظة", "--lines", "1");
+
+        Assert.Contains("سيعيد التطبيق تسميته إلى «عنوانٌ جديد»", output);
+    }
+
+    [Fact]
+    public void links_broken_يجمع_المكسور_من_القبو_كله()
+    {
+        using var t = new TempVault();
+        t.Note("أ.md", "يشير إلى [[غير موجودة]]\n");
+        t.Note("ب.md", "ويشير إلى [[مفقودة أخرى]]\n");
+        t.Note("ج.md", "صيغته `[[مثال في شيفرة]]` فليس رابطاً\n");
+
+        var (code, output) = Run(t, "", "links", "--broken");
+
+        Assert.Equal(Commands.Found, code);
+        Assert.Contains("غير موجودة", output);
+        Assert.Contains("مفقودة أخرى", output);
+        Assert.DoesNotContain("مثال في شيفرة", output);   // الشيفرة ليست رابطاً
+    }
+
+    [Fact]
+    public void tasks_folder_يرشّح_المهام_بمجلدها()
+    {
+        using var t = new TempVault();
+        t.Note("مشروع/مهام.md", "- [ ] مهمة المشروع\n");
+        t.Note("غيره/مهام.md", "- [ ] مهمة أخرى\n");
+
+        var (code, output) = Run(t, "", "tasks", "--folder", "مشروع");
+
+        Assert.Equal(Commands.Found, code);
+        Assert.Contains("مهمة المشروع", output);
+        Assert.DoesNotContain("مهمة أخرى", output);
+    }
+
+    [Fact]
     public void قارئ_الدخل_يفكّ_UTF8_لا_ترميز_الطرفية_العربي()
     {
         const string arabic = "# ملاحظات على «دفتري» — تنتظر جلسة تحسين";

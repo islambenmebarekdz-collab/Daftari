@@ -40,6 +40,37 @@ public class Vault
     string RenameLogPath => Path.Combine(MetaPath, RenameLogName);
 
     static readonly Regex LinkRegex = new(@"\[\[([^\]\|#]+)([#|][^\]]*)?\]\]", RegexOptions.Compiled);
+    static readonly Regex InlineCode = new("`[^`]*`", RegexOptions.Compiled);
+    static readonly Regex FenceLine = new(@"^\s*(```|~~~)", RegexOptions.Compiled);
+
+    /// <summary>
+    /// نسخةٌ من الأسطر أُخفيت فيها الشيفرة قبل تحليل الروابط: ما بين علامتَي شيفرة
+    /// مفردة، والكتل المسوّرة بثلاث علامات بما فيها سطرا السياج.
+    ///
+    /// <para>السبب أنّ <c>`[[اسم]]`</c> مثالٌ على الصيغة لا رابطٌ يُقصد — وهكذا يفهمه
+    /// Obsidian. وبدون هذا الإخفاء تولّد كلُّ ملاحظةٍ تشرح صيغة الروابط روابطَ وهمية
+    /// مكسورة، ووثائقنا عن الأداة نفسها أكثر ما يقع فيه.</para>
+    ///
+    /// <para>الإخفاء بمسافات لا بحذف، فتبقى أطوال الأسطر وأرقامها ومواضع الأحرف كما هي.</para>
+    /// </summary>
+    public static string[] MaskCode(string[] lines)
+    {
+        var masked = new string[lines.Length];
+        bool inFence = false;
+        for (int i = 0; i < lines.Length; i++)
+        {
+            if (FenceLine.IsMatch(lines[i]))
+            {
+                inFence = !inFence;
+                masked[i] = new string(' ', lines[i].Length);
+                continue;
+            }
+            masked[i] = inFence
+                ? new string(' ', lines[i].Length)
+                : InlineCode.Replace(lines[i], m => new string(' ', m.Length));
+        }
+        return masked;
+    }
     static readonly Regex TagRegex = new(@"(?<=^|[\s(])#([\p{L}\p{N}_\-/]+)", RegexOptions.Compiled);
 
     sealed class CachedNote
@@ -145,7 +176,7 @@ public class Vault
             {
                 Stamp = DateTime.MinValue,
                 Lines = lines,
-                LinkTargets = lines.SelectMany(l => LinkRegex.Matches(l).Select(m => m.Groups[1].Value.Trim()))
+                LinkTargets = MaskCode(lines).SelectMany(l => LinkRegex.Matches(l).Select(m => m.Groups[1].Value.Trim()))
                                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                 Tags = lines.SelectMany(l => TagRegex.Matches(l).Select(m => m.Groups[1].Value))
                             .Distinct().ToArray(),
@@ -168,7 +199,7 @@ public class Vault
                     Stamp = stamp,
                     Size = size,
                     Lines = lines,
-                    LinkTargets = lines
+                    LinkTargets = MaskCode(lines)
                         .SelectMany(l => LinkRegex.Matches(l).Select(m => m.Groups[1].Value.Trim()))
                         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
                     Tags = lines
@@ -416,6 +447,12 @@ public class Vault
             return tag.Length > 0 && n.Tags.Any(x => x.Contains(tag, Cmp));
         }
 
+        // الكلمة من حرفٍ واحد شرطٌ للمطابقة لا وزنٌ في الترجيح: حروف الجرّ والعطف
+        // في العربية كلمةٌ من حرف، تطابق كلَّ سطرٍ تقريباً فترفع ما لا صلة له.
+        // فإن كان الاستعلام كلّه حروفاً مفردة عادت هي مقياسَ الترجيح، وإلا أُهملت فيه.
+        var weighted = terms.Where(t => t.TrimStart('#').Length > 1).ToArray();
+        if (weighted.Length == 0) weighted = terms;
+
         var scored = new List<(int Score, string Path, List<SearchHit> Hits)>();
         foreach (var (p, note) in Indexed())
         {
@@ -428,13 +465,13 @@ public class Vault
 
             var hits = new List<SearchHit>();
             for (int i = 0; i < note.Lines.Length; i++)
-                if (terms.Any(t => note.Lines[i].Contains(t, Cmp)))
+                if (weighted.Any(t => note.Lines[i].Contains(t, Cmp)))
                     hits.Add(new SearchHit(p, i, note.Lines[i].Trim()));
 
             int score = hits.Count;
-            if (terms.All(t => title.Contains(t, Cmp))) score += 2000;        // العنوان يحوي كل الكلمات
-            else if (terms.Any(t => title.Contains(t, Cmp))) score += 1000;   // العنوان يحوي بعضها
-            if (terms.Any(t => MatchesTag(note, t))) score += 200;
+            if (weighted.All(t => title.Contains(t, Cmp))) score += 2000;        // العنوان يحوي كل الكلمات
+            else if (weighted.Any(t => title.Contains(t, Cmp))) score += 1000;   // العنوان يحوي بعضها
+            if (weighted.Any(t => MatchesTag(note, t))) score += 200;
             // العبارة كاملة متجاورة أقوى من كلمات متفرقة
             if (terms.Length > 1 &&
                 (title.Contains(query, Cmp) || note.Lines.Any(l => l.Contains(query, Cmp))))
@@ -489,7 +526,7 @@ public class Vault
     public IEnumerable<(string Target, int LineNumber, string? Path)> OutgoingLinks(string notePath)
     {
         string[] lines;
-        try { lines = File.ReadAllText(notePath).Replace("\r\n", "\n").Split('\n'); }
+        try { lines = MaskCode(File.ReadAllText(notePath).Replace("\r\n", "\n").Split('\n')); }
         catch { yield break; }
 
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);

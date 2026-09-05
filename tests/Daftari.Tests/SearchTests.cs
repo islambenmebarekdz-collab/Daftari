@@ -1,4 +1,4 @@
-using Xunit;
+﻿using Xunit;
 
 namespace Daftari.Tests;
 
@@ -123,5 +123,47 @@ public class SearchTests
 
         Assert.All(hits, h => Assert.False(NoteCrypto.IsEncrypted(h.FilePath)));
         Assert.Single(t.Vault.EncryptedNotes());
+    }
+
+    // ---------- الكلمة من حرف واحد لا ترفع الترجيح ----------
+
+    [Fact]
+    public void حرف_الجر_المفرد_لا_يرفع_ملاحظة_لا_صلة_لها()
+    {
+        using var t = new TempVault();
+        // لا مطابقة في العنوانين، فالترتيب بعدد الأسطر المطابقة وحده — وهنا يقع العيب:
+        // «ب» حرفٌ يطابق كل سطر تقريباً، فيرفع ملاحظةً لا صلة لها فوق المقصودة
+        // ولا تجاور بين الكلمتين في أيّهما، كي لا تحسمها مكافأةُ العبارة الكاملة
+        t.Note("منشور لا صلة له.md", "ب ب\nنسبة التوصيل ب\nب\nب\nب\nمرحلة\n");
+        t.Note("الوثيقة المقصودة.md", "مرحلة أولى\nمرحلة ثانية\nمرحلة ثالثة\nب\n");
+
+        var first = t.Vault.Search("مرحلة ب").First();
+
+        Assert.Equal("الوثيقة المقصودة", t.Vault.DisplayName(first.FilePath));
+    }
+
+    [Fact]
+    public void الكلمة_المفردة_تبقى_شرطاً_للمطابقة_لا_للترجيح()
+    {
+        using var t = new TempVault();
+        t.Note("فيها الاثنان.md", "مرحلة\nب\n");
+        t.Note("فيها واحدة.md", "مرحلة وحدها\n");
+
+        var names = t.Vault.Search("مرحلة ب").Select(h => t.Vault.DisplayName(h.FilePath)).Distinct().ToList();
+
+        Assert.Contains("فيها الاثنان", names);
+        Assert.DoesNotContain("فيها واحدة", names);   // «ب» غائبة فتُستبعد
+    }
+
+    [Fact]
+    public void استعلام_كله_حروف_مفردة_يبقى_عاملاً()
+    {
+        using var t = new TempVault();
+        t.Note("فيها الحرف.md", "ب هنا\n");
+        t.Note("بلا الحرف.md", "لا شيء\n");
+
+        var names = t.Vault.Search("ب").Select(h => t.Vault.DisplayName(h.FilePath)).Distinct().ToList();
+
+        Assert.Contains("فيها الحرف", names);
     }
 }

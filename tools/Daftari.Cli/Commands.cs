@@ -41,10 +41,11 @@ public static class Commands
           search <كلمات...>   بحثٌ مرجّح في المحتوى والعناوين والوسوم (كل الكلمات لازمة)
                               --files يعطي الملاحظات وعدد مطابقاتها بلا أسطرها
           links <اسم>         الروابط الواردة إلى الملاحظة والصادرة منها
+          links --broken      كل الروابط المكسورة في القبو كله
           index               كل الملاحظات بوقت آخر تعديل، الأحدث أولاً
           resolve <اسم>       يحلّ اسم رابط [[...]] إلى مسار ملف كامل
           show <اسم>          يطبع محتوى الملاحظة باسم رابطها
-          tasks [--all]       المهام غير المنجزة في القبو كله (--all يشمل المنجزة)
+          tasks [--all] [--folder <مجلد>]   المهام غير المنجزة (--all يشمل المنجزة)
           tags                الوسوم وملاحظات كل وسم
           renames [اسم]       سجلّ إعادة التسمية والحذف وما كتبته الأداة، الأحدث أولاً
 
@@ -132,8 +133,27 @@ public static class Commands
         return count > 0 ? Found : NothingFound;
     }
 
+    /// <summary>
+    /// كل الروابط المكسورة في القبو. <c>links</c> على ملاحظةٍ واحدة لا يجيب سؤال
+    /// «أين كلّ المكسور؟»، وهو السؤال الذي كان سيكشف أنّ الروابط داخل علامات
+    /// الشيفرة تُعدّ روابط، بدل العثور عليه مصادفةً.
+    /// </summary>
+    static int BrokenLinks(Vault vault, TextWriter output)
+    {
+        int count = 0;
+        foreach (var note in vault.AllNotes())
+            foreach (var (target, line, path) in vault.OutgoingLinks(note))
+                if (path == null)
+                {
+                    output.WriteLine(At(vault, note, line, $"[[{target}]] ← {BrokenLinkMark}"));
+                    count++;
+                }
+        return count > 0 ? Found : NothingFound;
+    }
+
     static int Links(Vault vault, string[] args, TextWriter output)
     {
+        if (args.Contains("--broken")) return BrokenLinks(vault, output);
         if (args.Length == 0) return Help(output, UsageError);
 
         var name = string.Join(' ', args);
@@ -209,9 +229,16 @@ public static class Commands
     static int Tasks(Vault vault, string[] args, TextWriter output)
     {
         bool includeDone = args.Contains("--all");
+        // ترشيحٌ بالمجلد: قبوٌ فيه مشاريع كثيرة يُخرج مهامّ لا تخصّ ما أعمل عليه
+        var folder = Option(args, "--folder");
+        var prefix = folder == null ? null
+            : Path.GetFullPath(Path.Combine(vault.Root, folder)) + Path.DirectorySeparatorChar;
+
         int count = 0;
         foreach (var task in vault.Tasks(includeDone))
         {
+            if (prefix != null &&
+                !Path.GetFullPath(task.FilePath).StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) continue;
             output.WriteLine(At(vault, task.FilePath, task.LineNumber, (task.Done ? "[x] " : "[ ] ") + task.Text));
             count++;
         }
@@ -315,6 +342,25 @@ public static class Commands
         return full;
     }
 
+    /// <summary>
+    /// ينبّه إن كان السطر الأول عنواناً «# …» يخالف اسم الملف. الواجهة تزامن اسم
+    /// الملف مع العنوان، فتعيد تسمية الملف أوّلَ ما يُفتح — أثرٌ لا يراه من كتب
+    /// ولا يتوقّعه صاحب القبو. وقع ذلك مرّتين في يومٍ واحد.
+    /// <para>ويطبع السطر الأول على كل حال: عطبُ ترميزٍ يظهر هنا في ثانية بدل أن
+    /// يمرّ صامتاً حتى يفتح أحدٌ الملف.</para>
+    /// </summary>
+    static void ReportFirstLine(Vault vault, string path, TextWriter output)
+    {
+        string first;
+        try { first = File.ReadAllLines(path).FirstOrDefault() ?? ""; } catch { return; }
+        output.WriteLine($"السطر الأول: {first}");
+
+        if (!first.StartsWith("# ")) return;
+        var title = Vault.Sanitize(first[2..].Trim());
+        if (title.Length == 0 || string.Equals(title, vault.DisplayName(path), StringComparison.Ordinal)) return;
+        output.WriteLine($"تنبيه: العنوان يخالف اسم الملف، فسيعيد التطبيق تسميته إلى «{title}» عند فتحه.");
+    }
+
     static int New(Vault vault, string[] args, TextWriter output, TextReader? input)
     {
         var name = Positional(args, "--folder");
@@ -326,6 +372,7 @@ public static class Commands
         var path = vault.CreateNote(target, name, ReadInput(input));
         vault.RecordWrite("create", path, vault.RelativeName(path));
         output.WriteLine(path);
+        ReportFirstLine(vault, path, output);
         return Found;
     }
 
@@ -375,6 +422,7 @@ public static class Commands
         // المُزال يُعرض كي يُرى الخطأ في حينه لا بعد أسبوع
         output.WriteLine($"استُبدل {span} في {vault.RelativeName(path)}. المُزال:");
         output.WriteLine(removed);
+        if (from == 1) ReportFirstLine(vault, path, output);   // العنوان تغيّر: قد تتبعه إعادة تسمية
         return Found;
     }
 
