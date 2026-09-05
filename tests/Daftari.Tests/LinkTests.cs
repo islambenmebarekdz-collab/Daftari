@@ -1,4 +1,4 @@
-using Xunit;
+﻿using Xunit;
 
 namespace Daftari.Tests;
 
@@ -130,5 +130,52 @@ public class LinkTests
 
         Assert.Equal(target, t.Vault.ResolveLink("هدف"));
         Assert.Null(t.Vault.ResolveLink("غير موجودة"));
+    }
+
+    // ---------- الروابط داخل الشيفرة ليست روابط ----------
+
+    [Fact]
+    public void رابط_بين_علامتي_شيفرة_مفردة_ليس_رابطاً()
+    {
+        using var t = new TempVault();
+        var note = t.Note("شرح.md", "المقترح: دعم روابط `[[اسم الملفّ]]` بنمط Obsidian\n");
+
+        Assert.Empty(t.Vault.OutgoingLinks(note));
+    }
+
+    [Fact]
+    public void رابط_داخل_كتلة_مسوّرة_ليس_رابطاً()
+    {
+        using var t = new TempVault();
+        var note = t.Note("شرح.md", "نصّ\n```\nمثال [[هدف]] داخل كتلة\n```\nنصّ آخر\n");
+
+        Assert.Empty(t.Vault.OutgoingLinks(note));
+    }
+
+    [Fact]
+    public void الرابط_الحقيقي_خارج_الشيفرة_يبقى_محسوباً()
+    {
+        using var t = new TempVault();
+        t.Note("هدف.md", "محتوى");
+        var note = t.Note("شرح.md", "صيغته `[[مثال]]` أمّا هذا [[هدف]] فرابطٌ حقيقي\n");
+
+        var links = t.Vault.OutgoingLinks(note).ToList();
+
+        Assert.Single(links);
+        Assert.Equal("هدف", links[0].Target);
+    }
+
+    [Fact]
+    public void الروابط_الواردة_لا_تُحتسب_من_داخل_الشيفرة()
+    {
+        using var t = new TempVault();
+        var target = t.Note("هدف.md", "محتوى");
+        t.Note("مثال.md", "هكذا تكتب `[[هدف]]` في ملاحظاتك\n");
+        t.Note("حقيقي.md", "أشير إلى [[هدف]] فعلاً\n");
+
+        var backlinks = t.Vault.Backlinks(target).ToList();
+
+        Assert.Single(backlinks);
+        Assert.Equal("حقيقي", t.Vault.DisplayName(backlinks[0].FilePath));
     }
 }
