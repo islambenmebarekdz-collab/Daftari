@@ -284,20 +284,76 @@ public class Vault
     /// يُلحق سطراً بالسجلّ. يبتلع كل خطأ عمداً: وقوعُ الحدث أهمّ من تسجيله،
     /// فلا يجوز أن تفشل إعادة تسمية أو حذفٌ نجحا لأنّ القرص رفض سطر سجلّ.
     /// </summary>
-    void Append(string kind, bool isFolder, string fromPath, string toPath)
+    void Append(string kind, bool isFolder, string fromPath, string toPath) =>
+        AppendEvent(kind, isFolder ? "folder" : "note", RelativeName(fromPath), RelativeName(toPath));
+
+    /// <summary>
+    /// يسجّل كتابةً أجرتها أداة الطرفية على القبو. تناديه الأداة بعد نجاح كل أمر كتابة،
+    /// فيصير السجلّ كشفَ حسابٍ بكل ما كتبته: ثقةٌ قابلة للتحقّق لا عمياء.
+    /// <para>ولا تسجّله الواجهة: ما يفعله المستخدم بيده ظاهرٌ له، وإنما يُسجَّل ما
+    /// تغيّر في قبوه دون أن يفعله.</para>
+    /// </summary>
+    public void RecordWrite(string kind, string path, string detail) =>
+        AppendEvent(kind, "note", RelativeName(path), detail);
+
+    void AppendEvent(string kind, string itemType, string from, string to)
     {
         try
         {
             Directory.CreateDirectory(MetaPath);
             var line = string.Join('\t',
                 DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture),
-                kind,
-                isFolder ? "folder" : "note",
-                RelativeName(fromPath),
-                RelativeName(toPath));
+                kind, itemType, from, to);
             File.AppendAllText(RenameLogPath, line + "\n", new UTF8Encoding(false));
         }
         catch { }
+    }
+
+    // ---------- كتابةٌ من خارج الواجهة ----------
+
+    /// <summary>
+    /// يُلحق نصاً بآخر الملاحظة ولا يمسّ ما قبله، فأسوأ خطأٍ فيه فقرةٌ زائدة ظاهرة.
+    /// يمرّ بحارس التشفير نفسه، فالملاحظة المقفلة تُرفض ولا يُكتب فوقها نصٌّ واضح.
+    /// </summary>
+    public bool AppendToNote(string path, string text)
+    {
+        if (!TryLoadForEdit(path, out var content)) return false;
+        var separator = content.Length == 0 || content.EndsWith("\n") ? "" : "\r\n";
+        return TrySaveEdited(path, content + separator + text);
+    }
+
+    /// <summary>
+    /// يستبدل نطاق أسطر بنصٍّ جديد، أو يشطبه إن كان البديل فارغاً.
+    /// أرقام الأسطر تبدأ من واحد وشاملةٌ للطرفين — وهي أرقام <see cref="Search"/> نفسها.
+    /// <para><paramref name="removed"/> يعيد ما أُزيل قبل إزالته، ليُرى الخطأ في حينه
+    /// لا بعد أسبوع. وأي مدىً خاطئ يُرفض دون أن يُمسّ الملف.</para>
+    /// </summary>
+    public bool ReplaceLines(string path, int from, int to, string replacement, out string removed)
+    {
+        removed = "";
+        if (!TryLoadForEdit(path, out var content)) return false;
+
+        var lines = content.Replace("\r\n", "\n").Split('\n').ToList();
+        // سطرٌ فارغ أخير أثرُ فاصلٍ لا سطرٌ حقيقي: إسقاطه يجعل الترقيم هنا
+        // مطابقاً لترقيم ReadAllLines الذي يقوم عليه البحث
+        bool trailingNewline = lines.Count > 0 && lines[^1].Length == 0;
+        if (trailingNewline) lines.RemoveAt(lines.Count - 1);
+
+        if (from < 1 || to < from || to > lines.Count) return false;
+
+        int count = to - from + 1;
+        removed = string.Join("\n", lines.GetRange(from - 1, count));
+        lines.RemoveRange(from - 1, count);
+        // الفحص على النصّ بعد تجريده من الفواصل لا على طوله الخام: الصدفة تمرّر
+        // «لا شيء» على أنه سطرٌ فارغ، فبديلٌ خامه "\n" كان يُدرج سطراً خالياً
+        // مكان المشطوب بدل ألّا يُدرج شيئاً
+        var body = replacement.Replace("\r\n", "\n").Trim('\n');
+        if (body.Length > 0) lines.InsertRange(from - 1, body.Split('\n'));
+
+        var text = string.Join("\r\n", lines) + (trailingNewline ? "\r\n" : "");
+        if (TrySaveEdited(path, text)) return true;
+        removed = "";
+        return false;
     }
 
     /// <summary>يوحّد الفاصل ليتطابق ما يُكتب بـ/ مع ما يُسجَّل بـ\.</summary>

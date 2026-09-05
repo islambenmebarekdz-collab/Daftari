@@ -31,6 +31,6 @@ static class Program
             return Commands.UsageError;
         }
 
-        return Commands.Run(new Vault(root), rest.ToArray(), Console.Out);
+        return Commands.Run(new Vault(root), rest.ToArray(), Console.Out, Console.In);
     }
 }
