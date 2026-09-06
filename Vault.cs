@@ -71,7 +71,9 @@ public class Vault
         }
         return masked;
     }
-    static readonly Regex TagRegex = new(@"(?<=^|[\s(])#([\p{L}\p{N}_\-/]+)", RegexOptions.Compiled);
+    // القوس المفتوح مقبولٌ قبل الوسم (وسمٌ بين قوسين)، إلا أن يسبقه قوسٌ مربّع مغلق:
+    // ‎](#اسم)‎ مرساةُ رابط Markdown لا وسم — يقع كثيراً في README منسوخ إلى ملاحظة
+    static readonly Regex TagRegex = new(@"(?<=^|[\s(])(?<!\]\()#([\p{L}\p{N}_\-/]+)", RegexOptions.Compiled);
 
     sealed class CachedNote
     {
@@ -81,7 +83,13 @@ public class Vault
         /// كما كان، أو تقع كتابتان داخل تكّة الطابع نفسها، فيبقى الطابع وحده كاذباً.
         /// </summary>
         public long Size;
+        /// <summary>الأسطر كما هي — للعرض والبحث، فالمستخدم يبحث في نصّه لا في نسخةٍ منه.</summary>
         public string[] Lines = Array.Empty<string>();
+        /// <summary>
+        /// الأسطر بعد إخفاء الشيفرة — لكل ما يستخرج بنيةً: الروابط والوسوم والمهامّ.
+        /// ما داخل الشيفرة مثالٌ على الصيغة لا استعمالٌ لها، فلا يُحتسب.
+        /// </summary>
+        public string[] Masked = Array.Empty<string>();
         public string[] LinkTargets = Array.Empty<string>();
         public string[] Tags = Array.Empty<string>();
     }
@@ -172,13 +180,15 @@ public class Vault
         {
             if (!File.Exists(kv.Key)) continue;
             var lines = kv.Value.Replace("\r\n", "\n").Split('\n');
+            var masked = MaskCode(lines);
             yield return (kv.Key, new CachedNote
             {
                 Stamp = DateTime.MinValue,
                 Lines = lines,
-                LinkTargets = MaskCode(lines).SelectMany(l => LinkRegex.Matches(l).Select(m => m.Groups[1].Value.Trim()))
+                Masked = masked,
+                LinkTargets = masked.SelectMany(l => LinkRegex.Matches(l).Select(m => m.Groups[1].Value.Trim()))
                                    .Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                Tags = lines.SelectMany(l => TagRegex.Matches(l).Select(m => m.Groups[1].Value))
+                Tags = masked.SelectMany(l => TagRegex.Matches(l).Select(m => m.Groups[1].Value))
                             .Distinct().ToArray(),
             });
         }
@@ -194,15 +204,17 @@ public class Vault
             {
                 string[] lines;
                 try { lines = File.ReadAllLines(p); } catch { continue; }
+                var masked = MaskCode(lines);
                 note = new CachedNote
                 {
                     Stamp = stamp,
                     Size = size,
                     Lines = lines,
-                    LinkTargets = MaskCode(lines)
+                    Masked = masked,
+                    LinkTargets = masked
                         .SelectMany(l => LinkRegex.Matches(l).Select(m => m.Groups[1].Value.Trim()))
                         .Distinct(StringComparer.OrdinalIgnoreCase).ToArray(),
-                    Tags = lines
+                    Tags = masked
                         .SelectMany(l => TagRegex.Matches(l).Select(m => m.Groups[1].Value))
                         .Distinct().ToArray()
                 };
@@ -729,6 +741,9 @@ public class Vault
             if (IsTemplate(p)) continue;      // مهام القالب نموذج لا عمل حقيقي
             for (int i = 0; i < note.Lines.Length; i++)
             {
+                // المطابقة على المقنَّع فلا يُعدّ مثالٌ داخل شيفرة مهمّةً
+                if (!TaskLine.IsMatch(note.Masked[i])) continue;
+                // والاستخراج من الأصل: مهمّةٌ نصُّها فيه شيفرة يخسر نصَّه لو أُخذ من المقنَّع
                 var m = TaskLine.Match(note.Lines[i]);
                 if (!m.Success) continue;
                 bool done = m.Groups[3].Value is "x" or "X";
