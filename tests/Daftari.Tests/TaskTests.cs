@@ -1,4 +1,4 @@
-using Xunit;
+﻿using Xunit;
 
 namespace Daftari.Tests;
 
@@ -145,5 +145,48 @@ public class TaskTests
         var note = t.Note("ملاحظة", "- [ ] مهمة");
 
         Assert.False(t.Vault.SetTaskDone(note, 99, done: true));
+    }
+
+    // ---------- المربّعات داخل الشيفرة ليست مهامّ ----------
+
+    [Fact]
+    public void مربّع_داخل_كتلة_مسوّرة_ليس_مهمة()
+    {
+        using var t = new TempVault();
+        t.Note("شرح.md", "نصّ\n```\n- [ ] مثالٌ على صيغة المهامّ\n```\nنصّ آخر\n");
+
+        Assert.Empty(t.Vault.Tasks());
+    }
+
+    [Fact]
+    public void مربّع_داخل_علامتي_شيفرة_مفردة_ليس_مهمة()
+    {
+        using var t = new TempVault();
+        t.Note("شرح.md", "تُكتب المهمة هكذا: `- [ ] نصّها`\n");
+
+        Assert.Empty(t.Vault.Tasks());
+    }
+
+    [Fact]
+    public void المهمة_الحقيقية_تبقى_بنصّها_الأصلي_ورقم_سطرها()
+    {
+        using var t = new TempVault();
+        t.Note("مهام.md", "مثال `- [ ] داخل شيفرة`\n```\n- [ ] داخل كتلة\n```\n- [ ] مهمة حقيقية\n");
+
+        var task = Assert.Single(t.Vault.Tasks());
+
+        Assert.Equal("مهمة حقيقية", task.Text);
+        Assert.Equal(4, task.LineNumber);   // يُعدّ من صفر: السطر الخامس
+    }
+
+    [Fact]
+    public void مهمةٌ_نصّها_فيه_شيفرة_لا_تخسر_نصّها()
+    {
+        using var t = new TempVault();
+        t.Note("مهام.md", "- [ ] راجع `Vault.cs` قبل الغد\n");
+
+        var task = Assert.Single(t.Vault.Tasks());
+
+        Assert.Equal("راجع `Vault.cs` قبل الغد", task.Text);
     }
 }

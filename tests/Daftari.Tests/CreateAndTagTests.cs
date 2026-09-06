@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using Xunit;
 
 namespace Daftari.Tests;
@@ -116,5 +116,51 @@ public class CreateAndTagTests
 
         t.Vault.ForgetAllUnlocked();
         Assert.DoesNotContain("سري", t.Vault.AllTags().Keys);   // تخرج فور إقفال الجلسة
+    }
+
+    // ---------- الوسوم داخل الشيفرة ليست وسوماً ----------
+
+    [Fact]
+    public void لون_سداسي_داخل_علامتي_شيفرة_ليس_وسماً()
+    {
+        using var t = new TempVault();
+        // حالةٌ حقيقية من قبو المستخدم: ‏#EAEAEA لونُ حدٍّ في مثال CSS صار وسماً
+        t.Note("تصميم.md", "حدود رفيعة (`1px solid #EAEAEA`) وخلفية دافئة\n");
+
+        Assert.Empty(t.Vault.AllTags());
+    }
+
+    [Fact]
+    public void وسم_داخل_كتلة_مسوّرة_ليس_وسماً()
+    {
+        using var t = new TempVault();
+        t.Note("شيفرة.md", "نصّ\n```css\n.a { color: #contributors; }\n```\n");
+
+        Assert.Empty(t.Vault.AllTags());
+    }
+
+    [Fact]
+    public void الوسم_الحقيقي_خارج_الشيفرة_يبقى()
+    {
+        using var t = new TempVault();
+        t.Note("ملاحظة.md", "لونٌ في مثال `#EAEAEA` ووسمٌ حقيقي #تطوير\n");
+
+        var tags = t.Vault.AllTags();
+
+        Assert.Single(tags);
+        Assert.True(tags.ContainsKey("تطوير"));
+    }
+
+    [Fact]
+    public void مرساة_رابط_ماركداون_ليست_وسماً()
+    {
+        using var t = new TempVault();
+        // حالةٌ حقيقية من قبو المستخدم: ‏](#contributors)‎ في README منسوخ صارت وسماً
+        t.Note("منسوخ.md", "[كل المساهمين](#contributors) ووسمٌ حقيقي #مشروع\n");
+
+        var tags = t.Vault.AllTags();
+
+        Assert.Single(tags);
+        Assert.True(tags.ContainsKey("مشروع"));
     }
 }
