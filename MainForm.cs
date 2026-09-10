@@ -49,6 +49,20 @@ public class MainForm : AppForm
     bool applyingHistory;
     bool editBurst;
 
+    /// <summary>
+    /// وضع القراءة (F9): يقفل يدَ المستخدم في المحرّر ويبقي التحديد والنسخ والتنقّل.
+    /// لا يُحفظ عند الإغلاق — كل تشغيلٍ يبدأ في التحرير، فلا يُفتح التطبيق يوماً
+    /// على حقلٍ لا يقبل الكتابة ولا يُعرف السبب.
+    /// </summary>
+    bool readOnlyMode;
+    /// <summary>
+    /// ما يجب أن يبقى عليه النصّ في وضع القراءة. يتجدّد مع كل تحميلٍ من القرص —
+    /// ومنه ما تكتبه أداة الطرفية — فالوضع يقفل يدَ المستخدم لا الكتابةَ المشروعة.
+    /// </summary>
+    string readOnlySnapshot = "";
+    DateTime lastReadOnlyNotice = DateTime.MinValue;
+    ToolStripMenuItem? readOnlyItem;
+
     public MainForm()
     {
         L.En = settings.Language == "en";
@@ -167,7 +181,16 @@ public class MainForm : AppForm
         editor.RightToLeft = settings.EditorRightToLeft ? RightToLeft.Yes : RightToLeft.No;
         editor.TextChanged += (_, _) =>
         {
-            if (loading) return;
+            if (loading)
+            {
+                // التحميل من القرص مشروعٌ في وضع القراءة أيضاً — ومنه ما تكتبه أداة الطرفية —
+                // فتتجدّد اللقطة بدل أن تردّه شبكةُ الأمان تحت
+                if (readOnlyMode) readOnlySnapshot = editor.Text;
+                return;
+            }
+            // شبكة الأمان: أيّ تغييرٍ في وضع القراءة لم يأتِ من تحميل يُردّ فوراً،
+            // فأمرٌ يُضاف مستقبلاً ويُنسى حارسُه عند مدخله لا يستطيع أن يكتب
+            if (readOnlyMode) { RestoreReadOnlySnapshot(); return; }
             dirty = true;
             countTimer.Stop();
             countTimer.Start();
@@ -191,6 +214,13 @@ public class MainForm : AppForm
         // ونؤجل بالطابور حتى يُدرج القوس فعلاً في النص.
         editor.KeyPress += (_, e) =>
         {
+            if (readOnlyMode)
+            {
+                // الحقل يتجاهل الضغطة بصمت، والصمت مربِكٌ لمن لا يرى — فيُنبَّه.
+                // والنسخ Ctrl+C محرفُ تحكّم فلا يدخل هنا. ولا منتقي إكمال: كان سيُدرج نصّاً
+                if (!char.IsControl(e.KeyChar) || e.KeyChar is '\b' or '\r') NoticeReadOnly();
+                return;
+            }
             if (!settings.LinkAutocomplete) return;
             int caret = editor.SelectionStart;
             if (caret < 1 || caret > editor.TextLength) return;
@@ -202,6 +232,11 @@ public class MainForm : AppForm
         };
         editor.KeyDown += (_, e) =>
         {
+            // Delete واللصق والقصّ لا تمرّ بـKeyPress بمحرفٍ مطبوع، فتُلتقط هنا
+            if (readOnlyMode && !e.Shift &&
+                (e.KeyCode == Keys.Delete || (e.Control && (e.KeyCode == Keys.V || e.KeyCode == Keys.X))))
+                NoticeReadOnly();
+
             if (e.Control && e.KeyCode == Keys.A)
             {
                 editor.SelectAll();
@@ -340,6 +375,9 @@ public class MainForm : AppForm
         view.DropDownItems.Add(new ToolStripSeparator());
         view.DropDownItems.Add(MI(L.T("تبديل اتجاه النص", "Toggle text direction"), Keys.Control | Keys.Shift | Keys.D, (_, _) => ToggleDirection()));
         view.DropDownItems.Add(MI(L.T("تبديل التفاف الأسطر", "Toggle word wrap"), Keys.Control | Keys.Shift | Keys.W, (_, _) => ToggleWrap()));
+        // مفتاحٌ بلا مُعدِّل عمداً: توليفات Ctrl+Shift+حرف لا يصلها بعض المستخدمين
+        readOnlyItem = MI(L.T("وضع القراءة: منع التحرير", "Reading mode: no editing"), Keys.F9, (_, _) => ToggleReadOnly());
+        view.DropDownItems.Add(readOnlyItem);
         view.DropDownItems.Add(MI(L.T("تكبير الخط", "Increase font size"), Keys.Control | Keys.Oemplus, (_, _) => ChangeFont(+1), "Ctrl+="));
         view.DropDownItems.Add(MI(L.T("تصغير الخط", "Decrease font size"), Keys.Control | Keys.OemMinus, (_, _) => ChangeFont(-1), "Ctrl+-"));
         view.DropDownItems.Add(new ToolStripSeparator());
@@ -1530,6 +1568,7 @@ public class MainForm : AppForm
     /// </summary>
     void CompleteWikiLink()
     {
+        if (EditingLocked()) return;
         if (currentNote == null) return;
         int caret = editor.SelectionStart;
         // تأكيد أن ما قبل المؤشر قوسان فعلاً (قد يكون النص تغيّر قبل تنفيذ الطابور)
@@ -1559,6 +1598,7 @@ public class MainForm : AppForm
     /// <summary>يُستدعى بعد كتابة # وسط سطر فيعرض وسوم القبو لإكمال الوسم.</summary>
     void CompleteTag()
     {
+        if (EditingLocked()) return;
         if (currentNote == null) return;
         int caret = editor.SelectionStart;
         if (caret < 1 || caret > editor.TextLength || editor.Text[caret - 1] != '#') return;
@@ -1585,6 +1625,7 @@ public class MainForm : AppForm
 
     void InsertLink()
     {
+        if (EditingLocked()) return;
         var items = vault.AllNotes().Select(p => (vault.DisplayName(p), p));
         using var picker = new NotePickerForm(L.T("إدراج رابط", "Insert link"),
             L.T("ابحث عن ملاحظة لإدراج رابط لها:", "Search for a note to link to:"), items, allowCreate: false);
@@ -1952,6 +1993,7 @@ public class MainForm : AppForm
     /// <summary>البحث والاستبدال داخل الملاحظة الحالية، مع إعلان عدد الاستبدالات.</summary>
     void ReplaceInNote()
     {
+        if (EditingLocked()) return;
         if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
         using var dlg = new ReplaceForm(lastFind, ReplaceNextOccurrence, ReplaceAllOccurrences);
         dlg.ShowDialog(this);
@@ -1987,6 +2029,59 @@ public class MainForm : AppForm
         return count;
     }
 
+    // ---------- وضع القراءة ----------
+
+    /// <summary>
+    /// يبدّل بين وضع القراءة ووضع التحرير. <c>ReadOnly</c> الأصلي يُبقي التحديد والنسخ
+    /// والتنقّل، ويعلن NVDA بنفسه «للقراءة فقط» عند دخول الحقل. لكنه يمنع لوحة المفاتيح
+    /// وحدها، فالأوامر التي تكتب برمجياً محروسةٌ عند مداخلها بـ<see cref="EditingLocked"/>.
+    /// </summary>
+    void ToggleReadOnly()
+    {
+        readOnlyMode = !readOnlyMode;
+        readOnlySnapshot = editor.Text;
+        editor.ReadOnly = readOnlyMode;
+        if (readOnlyItem != null) readOnlyItem.Checked = readOnlyMode;
+        Announce(readOnlyMode
+            ? L.T("وضع القراءة: التحرير مقفل، والتحديد والنسخ متاحان",
+                  "Reading mode: editing is locked, selecting and copying still work")
+            : L.T("وضع التحرير", "Editing mode"));
+    }
+
+    /// <summary>
+    /// حارسُ مدخل كل أمرٍ يكتب في المحرّر. في وضع القراءة يعلن ويمنع — ولا يفتح حتى
+    /// نافذة الجدول أو المنتقي، كي لا يملأها المستخدم ثم تُرفض.
+    /// </summary>
+    bool EditingLocked()
+    {
+        if (!readOnlyMode) return false;
+        Announce(L.T("الملاحظة للقراءة فقط — F9 للتحرير", "The note is read-only — F9 to edit"));
+        return true;
+    }
+
+    /// <summary>تنبيهٌ عند محاولة الكتابة، مرّةً كل ثلاث ثوانٍ لا عند كل ضغطة.</summary>
+    void NoticeReadOnly()
+    {
+        if ((DateTime.UtcNow - lastReadOnlyNotice).TotalSeconds < 3) return;
+        lastReadOnlyNotice = DateTime.UtcNow;
+        Announce(L.T("الملاحظة للقراءة فقط — F9 للتحرير", "The note is read-only — F9 to edit"));
+    }
+
+    /// <summary>
+    /// شبكة الأمان: يعيد النصّ إلى لقطة وضع القراءة إن تغيّر بغير تحميل. الإعادة نفسها
+    /// تمرّ بعلامة <c>loading</c>، فلا تُحتسب تعديلاً ولا تدخل سجلّ التراجع.
+    /// </summary>
+    void RestoreReadOnlySnapshot()
+    {
+        if (editor.Text == readOnlySnapshot) return;
+        int caret = editor.SelectionStart;
+        loading = true;
+        editor.Text = readOnlySnapshot;
+        loading = false;
+        editor.Select(Math.Min(caret, editor.TextLength), 0);
+        NoticeReadOnly();
+    }
+
     // ---------- التراجع والإعادة ----------
 
     void ResetHistory()
@@ -2000,6 +2095,7 @@ public class MainForm : AppForm
 
     void Undo()
     {
+        if (EditingLocked()) return;
         if (undoStack.Count == 0) { Announce(L.T("لا شيء للتراجع عنه", "Nothing to undo")); return; }
         var (text, caret) = undoStack[^1];
         undoStack.RemoveAt(undoStack.Count - 1);
@@ -2009,6 +2105,7 @@ public class MainForm : AppForm
 
     void Redo()
     {
+        if (EditingLocked()) return;
         if (redoStack.Count == 0) { Announce(L.T("لا شيء للإعادة", "Nothing to redo")); return; }
         var (text, caret) = redoStack[^1];
         redoStack.RemoveAt(redoStack.Count - 1);
@@ -2157,6 +2254,7 @@ public class MainForm : AppForm
     /// </summary>
     void InsertCodeBlock()
     {
+        if (EditingLocked()) return;
         if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
         var lang = InputBox.Show(this,
             L.T("كتلة كود", "Code block"),
@@ -2193,6 +2291,7 @@ public class MainForm : AppForm
     /// </summary>
     void ToggleTaskAtCaret()
     {
+        if (EditingLocked()) return;
         if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
         var text = editor.Text;
         var lines = editor.Lines;
@@ -2235,6 +2334,7 @@ public class MainForm : AppForm
 
     void InsertTimestamp()
     {
+        if (EditingLocked()) return;
         if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
         var stamp = Settings.FormatTimestamp(settings.DateFormat, DateTime.Now);
         editor.SelectedText = stamp;
@@ -2439,6 +2539,7 @@ public class MainForm : AppForm
     /// </summary>
     void EditTable()
     {
+        if (EditingLocked()) return;
         if (currentNote == null) { Announce(L.T("لا توجد ملاحظة مفتوحة", "No note is open")); return; }
         var text = editor.Text;
         var lines = editor.Lines;
@@ -2998,6 +3099,7 @@ Ctrl+Shift+H — فتح الملاحظة بصيغة HTML في المتصفح
 العرض:
 Ctrl+Shift+D — تبديل اتجاه النص في المحرر
 Ctrl+Shift+W — تبديل التفاف الأسطر
+F9 — وضع القراءة: يقفل التحرير ويبقي التحديد والنسخ، ومرّةً أخرى للعودة إلى التحرير
 (مع الالتفاف يقرأ NVDA السطر الطويل قطعاً بعرض النافذة،
 وبدونه يقرأ كل سطر كاملاً مهما طال)
 Ctrl+= و Ctrl+- — تكبير وتصغير الخط
@@ -3104,6 +3206,7 @@ and you can jump between headings with the H key)
 View:
 Ctrl+Shift+D — toggle editor text direction
 Ctrl+Shift+W — toggle word wrap
+F9 — reading mode: locks editing, keeps selecting and copying; press again to edit
 (with wrap on NVDA reads long lines in window-width chunks,
 with wrap off every line is read in full)
 Ctrl+= and Ctrl+- — increase and decrease font size
